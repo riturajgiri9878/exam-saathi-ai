@@ -1,0 +1,8 @@
+gradio==6.26.0
+pymupdf==1.28.2
+numpy>=1.26,<3
+scikit-learn>=1.5,<2
+sentence-transformers>=3,<6
+pytesseract>=0.3.10,<1
+Pillow>=10,<13
+socksio>=1,<2

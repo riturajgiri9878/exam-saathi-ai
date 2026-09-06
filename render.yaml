@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: exam-saathi-ai
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile.render
+    healthCheckPath: /
+    envVars:
+      - key: EXAM_SAATHI_EMBEDDINGS
+        value: disabled

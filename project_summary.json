@@ -1,0 +1,24 @@
+{
+    "project_name": "Exam Saathi AI",
+    "project_type": "Agentic AI Study Assistant",
+    "status": "MVP Completed",
+    "nlp_documents": 3,
+    "text_chunks": 5,
+    "important_topics": 12,
+    "smart_notes": 8,
+    "classified_questions": 30,
+    "embedding_shape": [
+        5,
+        384
+    ],
+    "sample_files": [
+        "2023_Biology_Sample_Question_Paper.pdf",
+        "2024_Biology_Sample_Question_Paper.pdf",
+        "2022_Biology_Sample_Question_Paper.pdf",
+        "01_Biology_DNA_Replication_Source_Notes.pdf",
+        "2021_Biology_Sample_Question_Paper.pdf",
+        "2025_Biology_Sample_Question_Paper.pdf",
+        "08_Camera_OCR_Handwritten_Notes.jpg"
+    ],
+    "export_time": "2026-09-06T06:23:48.699493"
+}

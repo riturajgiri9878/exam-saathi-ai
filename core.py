@@ -28,7 +28,11 @@ OCR_TIMEOUT_SECONDS = 60
 SCANNED_PDF_RENDER_SCALE = 1.15
 OCR_LANGUAGE = os.environ.get("OCR_LANGUAGE", "eng")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash").strip()
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.6-flash").strip()
+GEMINI_FALLBACK_MODELS = os.environ.get(
+    "GEMINI_FALLBACK_MODELS",
+    "gemini-3.1-flash-lite",
+).split(",")
 GEMINI_FALLBACK_THRESHOLD = 60.0
 MAX_TEXT_CHARACTERS = 200_000
 CHUNK_WORD_SIZE = 120
@@ -259,7 +263,7 @@ def run_gemini_document_ocr(
     file_path: str | Path,
     mime_type: str,
     expected_pages: int,
-) -> list[dict[str, Any]]:
+) -> tuple[list[dict[str, Any]], str]:
     """Use native Gemini document vision for difficult handwriting and formulas."""
     if not GEMINI_API_KEY:
         raise ValueError("Gemini OCR is not configured. Add GEMINI_API_KEY in Render Environment.")
@@ -305,22 +309,49 @@ UNCERTAIN:
 <<<END PAGE 1>>>
 Then repeat the same markers for every page.
 """.strip()
-    try:
-        client = genai.Client(api_key=GEMINI_API_KEY)
-        response = client.models.generate_content(
-            model=GEMINI_MODEL,
-            contents=[
-                types.Part.from_bytes(data=Path(file_path).read_bytes(), mime_type=mime_type),
-                prompt,
-            ],
-            config=types.GenerateContentConfig(
-                temperature=0,
-                max_output_tokens=65_536,
-            ),
-        )
-    except Exception as error:
-        message = str(error).strip() or error.__class__.__name__
-        raise ValueError(f"Gemini OCR request failed: {message[:300]}") from error
+    client = genai.Client(api_key=GEMINI_API_KEY)
+    contents = [
+        types.Part.from_bytes(data=Path(file_path).read_bytes(), mime_type=mime_type),
+        prompt,
+    ]
+    config = types.GenerateContentConfig(temperature=0, max_output_tokens=65_536)
+    models = []
+    for candidate in [GEMINI_MODEL, *GEMINI_FALLBACK_MODELS]:
+        candidate = candidate.strip()
+        if candidate and candidate not in models:
+            models.append(candidate)
+
+    response = None
+    used_model = ""
+    errors: list[str] = []
+    for model in models:
+        for attempt in range(2):
+            try:
+                response = client.models.generate_content(
+                    model=model,
+                    contents=contents,
+                    config=config,
+                )
+                used_model = model
+                break
+            except Exception as error:
+                message = str(error).strip() or error.__class__.__name__
+                errors.append(f"{model}: {message[:220]}")
+                upper_message = message.upper()
+                if any(code in upper_message for code in ("401", "403", "UNAUTHENTICATED")):
+                    raise ValueError(f"Gemini authentication failed: {message[:300]}") from error
+                retryable = any(code in upper_message for code in (
+                    "429", "500", "502", "503", "504", "UNAVAILABLE",
+                    "RESOURCE_EXHAUSTED", "HIGH DEMAND",
+                ))
+                if retryable and attempt == 0:
+                    time.sleep(2)
+                    continue
+                break
+        if response is not None:
+            break
+    if response is None:
+        raise ValueError("Gemini models unavailable. " + " | ".join(errors[-4:]))
 
     pages = _parse_gemini_pages(getattr(response, "text", ""), expected_pages)
     if not pages:
@@ -338,7 +369,7 @@ Then repeat the same markers for every page.
                 "usable": False,
             })
     pages.sort(key=lambda page: page["page_number"])
-    return pages
+    return pages, used_model
 
 
 def calculate_ocr_confidence(image: Image.Image) -> dict[str, Any]:
@@ -373,7 +404,7 @@ def extract_uploaded_content(file_path: str | Path) -> tuple[list[dict[str, Any]
             # Native document vision avoids running slow local OCR over every scanned page.
             if scanned_page_numbers and GEMINI_API_KEY:
                 try:
-                    gemini_pages = run_gemini_document_ocr(
+                    gemini_pages, used_model = run_gemini_document_ocr(
                         file_path,
                         "application/pdf",
                         expected_pages,
@@ -382,7 +413,7 @@ def extract_uploaded_content(file_path: str | Path) -> tuple[list[dict[str, Any]
                         "average_confidence": None,
                         "status": "GEMINI VISION - Human Review Recommended",
                         "low_words": [],
-                        "provider": f"Gemini Vision OCR ({GEMINI_MODEL})",
+                        "provider": f"Gemini Vision OCR ({used_model})",
                     }
                 except ValueError as error:
                     raise ValueError(
@@ -424,12 +455,12 @@ def extract_uploaded_content(file_path: str | Path) -> tuple[list[dict[str, Any]
         mime_type = "image/png" if extension == ".png" else "image/jpeg"
         if GEMINI_API_KEY:
             try:
-                gemini_pages = run_gemini_document_ocr(file_path, mime_type, 1)
+                gemini_pages, used_model = run_gemini_document_ocr(file_path, mime_type, 1)
                 return gemini_pages, {
                     "average_confidence": None,
                     "status": "GEMINI VISION - Human Review Recommended",
                     "low_words": [],
-                    "provider": f"Gemini Vision OCR ({GEMINI_MODEL})",
+                    "provider": f"Gemini Vision OCR ({used_model})",
                 }
             except ValueError as error:
                 raise ValueError(

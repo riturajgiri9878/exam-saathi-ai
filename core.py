@@ -326,11 +326,18 @@ Then repeat the same markers for every page.
     if not pages:
         raise ValueError("Gemini OCR returned no readable transcription.")
     page_numbers = {page["page_number"] for page in pages}
-    if expected_pages > 1 and len(page_numbers) != expected_pages:
-        raise ValueError(
-            f"Gemini OCR returned {len(page_numbers)} of {expected_pages} pages; "
-            "the complete local OCR result was kept instead."
-        )
+    # Partial evidence is useful: keep every readable page and mark missing pages
+    # instead of rejecting the whole document and falling into a slow OCR timeout.
+    for page_number in range(1, expected_pages + 1):
+        if page_number not in page_numbers:
+            pages.append({
+                "page_number": page_number,
+                "text": "NO RELIABLE CONTENT",
+                "extraction_method": "Gemini Smart Vision (page unavailable)",
+                "readability": "UNKNOWN",
+                "usable": False,
+            })
+    pages.sort(key=lambda page: page["page_number"])
     return pages
 
 
@@ -378,7 +385,9 @@ def extract_uploaded_content(file_path: str | Path) -> tuple[list[dict[str, Any]
                         "provider": f"Gemini Vision OCR ({GEMINI_MODEL})",
                     }
                 except ValueError as error:
-                    gemini_error = str(error)
+                    raise ValueError(
+                        f"Gemini Smart Extraction could not run: {error}"
+                    ) from error
 
             for page_index, page in enumerate(document):
                 page_number = page_index + 1
@@ -423,7 +432,9 @@ def extract_uploaded_content(file_path: str | Path) -> tuple[list[dict[str, Any]
                     "provider": f"Gemini Vision OCR ({GEMINI_MODEL})",
                 }
             except ValueError as error:
-                gemini_error = str(error)
+                raise ValueError(
+                    f"Gemini Smart Extraction could not run: {error}"
+                ) from error
 
         with Image.open(file_path) as source_image:
             image = prepare_image_for_ocr(source_image)

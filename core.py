@@ -13,13 +13,18 @@ from typing import Any
 import numpy as np
 import pymupdf
 import pytesseract
-from PIL import Image
+from PIL import Image, ImageOps
 from sklearn.feature_extraction.text import ENGLISH_STOP_WORDS, TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
 
 MAX_FILE_SIZE_MB = 10
 MAX_PDF_PAGES = 50
+MAX_BATCH_FILES = 10
+MAX_BATCH_SIZE_MB = 40
+MAX_IMAGE_PIXELS = 40_000_000
+OCR_MAX_DIMENSION = 1800
+OCR_TIMEOUT_SECONDS = 25
 MAX_TEXT_CHARACTERS = 200_000
 CHUNK_WORD_SIZE = 120
 CHUNK_WORD_OVERLAP = 25
@@ -30,6 +35,8 @@ PROJECT_STOP_WORDS = {
     "questions", "practice", "sample", "diagram", "figure", "chapter",
     "student", "students", "learn", "learning", "goal", "revision",
     "quick", "value", "high", "based", "using", "used", "called",
+    "explain", "define", "describe", "state", "draw", "calculate",
+    "compare", "distinguish", "mention", "list", "write", "identify",
 }
 STOP_WORDS = sorted(set(ENGLISH_STOP_WORDS).union(PROJECT_STOP_WORDS))
 
@@ -89,7 +96,15 @@ def validate_uploaded_file(file_path: str | Path | None) -> dict[str, Any]:
     else:
         try:
             with Image.open(path) as image:
+                width, height = image.size
+                if width * height > MAX_IMAGE_PIXELS:
+                    raise ValueError(
+                        "Image resolution is too large. Please use an image below "
+                        "40 megapixels."
+                    )
                 image.verify()
+        except ValueError:
+            raise
         except Exception as error:
             raise ValueError("The uploaded image is damaged or invalid.") from error
 
@@ -112,12 +127,19 @@ def clean_extracted_text(raw_text: Any) -> str:
     return re.sub(r" {2,}", " ", "\n".join(lines)).strip()
 
 
-def calculate_ocr_confidence(image: Image.Image) -> dict[str, Any]:
-    data = pytesseract.image_to_data(
-        image,
-        lang="eng+hin",
-        output_type=pytesseract.Output.DICT,
-    )
+def prepare_image_for_ocr(source_image: Image.Image) -> Image.Image:
+    """Correct phone orientation and resize before OCR to protect free-tier CPU."""
+    image = ImageOps.exif_transpose(source_image).convert("RGB")
+    if max(image.size) > OCR_MAX_DIMENSION:
+        image.thumbnail(
+            (OCR_MAX_DIMENSION, OCR_MAX_DIMENSION),
+            Image.Resampling.LANCZOS,
+        )
+    grayscale = ImageOps.grayscale(image)
+    return ImageOps.autocontrast(grayscale)
+
+
+def _confidence_from_ocr_data(data: dict[str, Any]) -> dict[str, Any]:
     confidences: list[float] = []
     low_words: list[dict[str, Any]] = []
     for word, raw_confidence in zip(data.get("text", []), data.get("conf", [])):
@@ -141,6 +163,46 @@ def calculate_ocr_confidence(image: Image.Image) -> dict[str, Any]:
     return {"average_confidence": average, "status": status, "low_words": low_words[:15]}
 
 
+def run_ocr_once(image: Image.Image) -> tuple[str, dict[str, Any]]:
+    """Extract OCR text and confidence in one Tesseract pass."""
+    try:
+        data = pytesseract.image_to_data(
+            image,
+            lang="eng+hin",
+            config="--oem 1 --psm 6",
+            output_type=pytesseract.Output.DICT,
+            timeout=OCR_TIMEOUT_SECONDS,
+        )
+    except RuntimeError as error:
+        raise ValueError(
+            f"OCR exceeded {OCR_TIMEOUT_SECONDS} seconds. Crop the photo, use "
+            "good lighting and try again."
+        ) from error
+
+    lines: dict[tuple[Any, Any, Any, Any], list[str]] = {}
+    text_values = data.get("text", [])
+    for index, raw_word in enumerate(text_values):
+        word = str(raw_word).strip()
+        if not word:
+            continue
+        key = (
+            data.get("page_num", [0] * len(text_values))[index],
+            data.get("block_num", [0] * len(text_values))[index],
+            data.get("par_num", [0] * len(text_values))[index],
+            data.get("line_num", [0] * len(text_values))[index],
+        )
+        lines.setdefault(key, []).append(word)
+
+    text = "\n".join(" ".join(words) for words in lines.values())
+    return clean_extracted_text(text), _confidence_from_ocr_data(data)
+
+
+def calculate_ocr_confidence(image: Image.Image) -> dict[str, Any]:
+    """Backward-compatible confidence helper using the optimized OCR pass."""
+    _, confidence = run_ocr_once(prepare_image_for_ocr(image))
+    return confidence
+
+
 def extract_uploaded_content(file_path: str | Path) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
     info = validate_uploaded_file(file_path)
     extension = info["extension"]
@@ -156,12 +218,11 @@ def extract_uploaded_content(file_path: str | Path) -> tuple[list[dict[str, Any]
                 method = "PDF Text"
                 if len(cleaned_text.split()) < 10:
                     pixmap = page.get_pixmap(matrix=pymupdf.Matrix(2, 2), alpha=False)
-                    image = Image.open(io.BytesIO(pixmap.tobytes("png"))).convert("RGB")
-                    cleaned_text = clean_extracted_text(
-                        pytesseract.image_to_string(image, lang="eng+hin")
-                    )
+                    with Image.open(io.BytesIO(pixmap.tobytes("png"))) as rendered:
+                        image = prepare_image_for_ocr(rendered)
+                    cleaned_text, confidence = run_ocr_once(image)
                     method = "Scanned PDF OCR"
-                    confidence_results.append(calculate_ocr_confidence(image))
+                    confidence_results.append(confidence)
 
                 if cleaned_text:
                     total_characters += len(cleaned_text)
@@ -178,12 +239,11 @@ def extract_uploaded_content(file_path: str | Path) -> tuple[list[dict[str, Any]
             document.close()
     else:
         with Image.open(file_path) as source_image:
-            image = source_image.convert("RGB")
-            text = clean_extracted_text(
-                pytesseract.image_to_string(image, lang="eng+hin")
-            )
-            confidence_results.append(calculate_ocr_confidence(image))
+            image = prepare_image_for_ocr(source_image)
+        text, confidence = run_ocr_once(image)
+        confidence_results.append(confidence)
         if text:
+            total_characters += len(text)
             pages.append({
                 "page_number": 1,
                 "text": text,
@@ -446,26 +506,92 @@ def analyze_documents(documents: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def analyze_file(file_path: str | Path) -> dict[str, Any]:
-    info = validate_uploaded_file(file_path)
-    pages, confidence = extract_uploaded_content(file_path)
-    source_type = "PDF" if info["extension"] == ".pdf" else "Camera Image"
-    documents = [
-        {
-            "document_id": index,
-            "source_name": info["file_name"],
-            "source_type": source_type,
-            "page_number": page["page_number"],
-            "text": page["text"],
-            "cleaned_text": prepare_text_for_nlp(page["text"]),
-            "extraction_method": page["extraction_method"],
-            "human_approved": page["extraction_method"] == "PDF Text",
+def analyze_files(file_paths: list[str | Path] | tuple[str | Path, ...]) -> dict[str, Any]:
+    """Validate and analyze one to ten PDFs or study images as one collection."""
+    paths = [Path(path) for path in file_paths if path]
+    if not paths:
+        raise ValueError("Please upload at least one PDF or image file.")
+    if len(paths) > MAX_BATCH_FILES:
+        raise ValueError(f"Upload a maximum of {MAX_BATCH_FILES} files at one time.")
+
+    total_size_mb = sum(path.stat().st_size for path in paths if path.is_file()) / (1024 * 1024)
+    if total_size_mb > MAX_BATCH_SIZE_MB:
+        raise ValueError(
+            f"Combined upload exceeds {MAX_BATCH_SIZE_MB} MB. Use smaller images."
+        )
+
+    documents: list[dict[str, Any]] = []
+    file_infos: list[dict[str, Any]] = []
+    confidence_results: list[dict[str, Any]] = []
+    warnings: list[str] = []
+
+    for path in paths:
+        try:
+            info = validate_uploaded_file(path)
+            pages, confidence = extract_uploaded_content(path)
+            source_type = "PDF" if info["extension"] == ".pdf" else "Camera Image"
+            file_infos.append(info)
+            if confidence:
+                confidence_results.append(confidence)
+            for page in pages:
+                documents.append({
+                    "document_id": len(documents) + 1,
+                    "source_name": info["file_name"],
+                    "source_type": source_type,
+                    "page_number": page["page_number"],
+                    "text": page["text"],
+                    "cleaned_text": prepare_text_for_nlp(page["text"]),
+                    "extraction_method": page["extraction_method"],
+                    "human_approved": page["extraction_method"] == "PDF Text",
+                })
+        except Exception as error:
+            warnings.append(f"{path.name}: {error}")
+
+    if not documents:
+        reason = "; ".join(warnings) if warnings else "No readable text was found."
+        raise ValueError(reason)
+    if sum(len(item["text"]) for item in documents) > MAX_TEXT_CHARACTERS:
+        raise ValueError(f"Combined extracted text exceeds {MAX_TEXT_CHARACTERS} characters.")
+
+    combined_confidence = None
+    if confidence_results:
+        combined_confidence = {
+            "average_confidence": round(float(np.mean([
+                item["average_confidence"] for item in confidence_results
+            ])), 2),
+            "status": min(
+                confidence_results,
+                key=lambda item: item["average_confidence"],
+            )["status"],
+            "low_words": [
+                word
+                for item in confidence_results
+                for word in item.get("low_words", [])
+            ][:15],
         }
-        for index, page in enumerate(pages, start=1)
-    ]
+
+    summary_info = {
+        "file_name": (
+            file_infos[0]["file_name"]
+            if len(file_infos) == 1
+            else f"{len(file_infos)} study files"
+        ),
+        "extension": file_infos[0]["extension"] if len(file_infos) == 1 else ".batch",
+        "size_mb": round(sum(item["size_mb"] for item in file_infos), 2),
+    }
     result = analyze_documents(documents)
-    result.update({"file_info": info, "ocr_confidence": confidence})
+    result.update({
+        "file_info": summary_info,
+        "file_infos": file_infos,
+        "ocr_confidence": combined_confidence,
+        "batch_warnings": warnings,
+    })
     return result
+
+
+def analyze_file(file_path: str | Path) -> dict[str, Any]:
+    """Backward-compatible single-file entry point."""
+    return analyze_files([file_path])
 
 
 def analyze_approved_text(text: str, source_name: str = "Human_Approved_OCR.txt") -> dict[str, Any]:

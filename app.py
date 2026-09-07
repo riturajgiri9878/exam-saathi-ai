@@ -13,13 +13,27 @@ import gradio as gr
 from core import (
     SECURITY_GUARD,
     analyze_approved_text,
-    analyze_file,
+    analyze_files,
     semantic_search,
 )
 
 
 BASE_DIR = Path(__file__).resolve().parent
 REPORTS_DIR = BASE_DIR / "reports"
+
+APP_USERNAME = os.environ.get("EXAM_SAATHI_USERNAME", "").strip()
+APP_PASSWORD = os.environ.get("EXAM_SAATHI_PASSWORD", "").strip()
+REQUIRE_AUTH = os.environ.get("REQUIRE_AUTH", "false").lower() in {
+    "true", "1", "yes", "on"
+}
+
+if REQUIRE_AUTH and not (APP_USERNAME and APP_PASSWORD):
+    raise RuntimeError(
+        "Secure login is required. Set EXAM_SAATHI_USERNAME and "
+        "EXAM_SAATHI_PASSWORD in the hosting environment."
+    )
+
+APP_AUTH = (APP_USERNAME, APP_PASSWORD) if APP_USERNAME and APP_PASSWORD else None
 
 
 def read_text_report(name: str, fallback: str) -> str:
@@ -104,10 +118,10 @@ def questions_markdown(result: dict[str, Any]) -> str:
 
 def preview_markdown(result: dict[str, Any]) -> str:
     output = "## 📄 Extracted Text Preview\n\n"
-    for document in result.get("documents", [])[:3]:
+    for document in result.get("documents", [])[:10]:
         safe_text = html.escape(document["text"][:1_500])
         output += (
-            f"### Page {document['page_number']}\n\n"
+            f"### {document['source_name']} - Page {document['page_number']}\n\n"
             f"**Method:** {document['extraction_method']}\n\n"
             f"{safe_text}\n\n---\n\n"
         )
@@ -136,20 +150,37 @@ def ocr_markdown(result: dict[str, Any]) -> str:
     return output
 
 
-def process_file_ui(file_path: str | None):
+def process_file_ui(file_paths: Any):
     try:
-        result = analyze_file(file_path)
+        if isinstance(file_paths, (str, Path)):
+            normalized_paths = [str(file_paths)]
+        else:
+            normalized_paths = [str(path) for path in (file_paths or [])]
+        result = analyze_files(normalized_paths)
         info = result["file_info"]
+        file_infos = result.get("file_infos", [info])
+        file_list = "\n".join(
+            f"  - {item['file_name']} ({item['size_mb']} MB)"
+            for item in file_infos
+        )
         status = (
-            "## ✅ File Processed Safely\n\n"
-            f"- **File:** {info['file_name']}\n"
-            f"- **File size:** {info['size_mb']} MB\n"
+            "## ✅ Files Processed Safely\n\n"
+            f"- **Files accepted:** {len(file_infos)}\n"
+            f"- **Combined size:** {info['size_mb']} MB\n"
             f"- **Readable pages:** {len(result['documents'])}\n"
             "- **Security:** Passed\n"
-            f"- **NLP mode:** {result['processing_mode']}"
+            f"- **NLP mode:** {result['processing_mode']}\n\n"
+            f"**Processed files:**\n{file_list}"
         )
+        warnings = result.get("batch_warnings", [])
+        if warnings:
+            status += "\n\n**Skipped files:**\n" + "\n".join(
+                f"- {html.escape(message)}" for message in warnings
+            )
         editable_text = "\n\n".join(
-            document["text"] for document in result["documents"]
+            f"[{document['source_name']} - Page {document['page_number']}]\n"
+            f"{document['text']}"
+            for document in result["documents"]
         )
         return (
             status,
@@ -333,6 +364,14 @@ html, body { background: #eef2ff !important; }
 .gradio-container input, .gradio-container textarea {
     background: white !important; color: #0f172a !important; border-color: #94a3b8 !important;
 }
+.gradio-container .generating { opacity: 1 !important; }
+#study-upload, #study-upload > div, #study-upload .wrap,
+#study-upload .file-preview, #study-upload .file-preview * {
+    background: #ffffff !important; color: #0f172a !important;
+}
+#ocr-review, #ocr-review > div, #ocr-review textarea {
+    background: #ffffff !important; color: #0f172a !important;
+}
 .gradio-container code { background: #ede9fe !important; color: #5b21b6 !important; }
 footer { display: none !important; }
 @media (max-width: 768px) {
@@ -381,13 +420,16 @@ Exam Saathi विद्यार्थियों के study documents क�
 
         with gr.Tab("📤 Secure Upload"):
             gr.Markdown(
-                "## Upload Study Material\n\nPDF, scanned PDF, PNG, JPG/JPEG — maximum 10 MB and 50 PDF pages.",
+                "## Upload Study Material\n\nSelect up to 10 PDFs or camera images together. "
+                "Maximum 10 MB per file, 40 MB combined and 50 pages per PDF.",
                 elem_classes=["exam-card"],
             )
             study_file = gr.File(
-                label="Upload PDF or Study Image",
+                label="Upload up to 10 PDFs or Study Images",
                 file_types=[".pdf", ".png", ".jpg", ".jpeg"],
                 type="filepath",
+                file_count="multiple",
+                elem_id="study-upload",
             )
             process_button = gr.Button(
                 "🔍 Securely Process and Generate Study Material",
@@ -405,6 +447,7 @@ Exam Saathi विद्यार्थियों के study documents क�
                 label="Review or Correct Extracted Text",
                 lines=10,
                 placeholder="Extracted text will appear here.",
+                elem_id="ocr-review",
             )
             approve_button = gr.Button("✅ Approve Corrected Text")
             approval_status = gr.Markdown()
@@ -481,7 +524,7 @@ Exam Saathi विद्यार्थियों के study documents क�
 
 
 if __name__ == "__main__":
-    demo.queue(default_concurrency_limit=4).launch(
+    demo.queue(default_concurrency_limit=1).launch(
         server_name="0.0.0.0",
         server_port=int(os.environ.get("PORT", "7860")),
         show_error=False,
@@ -491,4 +534,6 @@ if __name__ == "__main__":
             neutral_hue="slate",
         ),
         css=CUSTOM_CSS,
+        auth=APP_AUTH,
+        auth_message="Exam Saathi is private. Enter the credentials shared by the project owner.",
     )

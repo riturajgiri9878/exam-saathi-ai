@@ -94,6 +94,19 @@ def notes_markdown(result: dict[str, Any]) -> str:
     return output
 
 
+def formulas_markdown(result: dict[str, Any]) -> str:
+    formulas = result.get("formulas", [])
+    output = "## 📐 Source-Based Formula Sheet\n\n"
+    if not formulas:
+        return output + "No reliable formula was extracted. Check Human Review before studying."
+    for number, item in enumerate(formulas, start=1):
+        output += (
+            f"{number}. `{item['formula']}`  \n"
+            f"   📄 **Source:** {item['source_name']} | Page {item['page_number']}\n\n"
+        )
+    return output
+
+
 def questions_markdown(result: dict[str, Any]) -> str:
     bank = result.get("question_bank", {})
     output = "## ✍️ Generated Question Bank\n\n### Short Questions\n\n"
@@ -122,7 +135,8 @@ def preview_markdown(result: dict[str, Any]) -> str:
         safe_text = html.escape(document["text"][:1_500])
         output += (
             f"### {document['source_name']} - Page {document['page_number']}\n\n"
-            f"**Method:** {document['extraction_method']}\n\n"
+            f"**Method:** {document['extraction_method']}  \n"
+            f"**Readability:** {document.get('readability', 'UNKNOWN')}\n\n"
             f"{safe_text}\n\n---\n\n"
         )
     return output
@@ -184,6 +198,14 @@ def process_file_ui(file_paths: Any):
             f"- **NLP mode:** {result['processing_mode']}\n\n"
             f"**Processed files:**\n{file_list}"
         )
+        quality = result.get("page_quality", {})
+        if quality:
+            status += (
+                "\n\n**Smart extraction quality:** "
+                f"High {quality.get('HIGH', 0)} | Medium {quality.get('MEDIUM', 0)} | "
+                f"Low {quality.get('LOW', 0)} | "
+                f"Unusable skipped {quality.get('SKIPPED', 0)}"
+            )
         warnings = result.get("batch_warnings", [])
         if warnings:
             status += "\n\n**Skipped files:**\n" + "\n".join(
@@ -201,6 +223,7 @@ def process_file_ui(file_paths: Any):
             editable_text,
             topics_markdown(result),
             notes_markdown(result),
+            formulas_markdown(result),
             questions_markdown(result),
             result,
         )
@@ -213,6 +236,7 @@ def process_file_ui(file_paths: Any):
             "",
             DEMO_TOPICS,
             DEMO_NOTES,
+            "## 📐 Formula Sheet\n\nNo reliable formula extracted.",
             DEMO_QUESTIONS,
             {},
         )
@@ -230,12 +254,14 @@ def approve_corrected_text(edited_text: str, current_state: dict[str, Any]):
             "## ✅ Human Review Approved\n\nCorrected text was accepted and NLP results were regenerated.",
             topics_markdown(result),
             notes_markdown(result),
+            formulas_markdown(result),
             questions_markdown(result),
             result,
         )
     except Exception as error:
         return (
             f"## ❌ Approval Failed\n\n{html.escape(str(error))}",
+            gr.skip(),
             gr.skip(),
             gr.skip(),
             gr.skip(),
@@ -489,6 +515,12 @@ Exam Saathi विद्यार्थियों के study documents क�
         with gr.Tab("📝 Smart Notes"):
             notes_output = gr.Markdown(DEMO_NOTES, elem_classes=["exam-card"])
 
+        with gr.Tab("📐 Formula Sheet"):
+            formulas_output = gr.Markdown(
+                "## Formula Sheet\n\nUpload study material to extract source-based formulas.",
+                elem_classes=["exam-card"],
+            )
+
         with gr.Tab("✍️ Question Bank"):
             questions_output = gr.Markdown(DEMO_QUESTIONS, elem_classes=["exam-card"])
 
@@ -535,13 +567,16 @@ Exam Saathi विद्यार्थियों के study documents क�
         inputs=[study_file],
         outputs=[
             upload_status, extracted_preview, ocr_status, corrected_text,
-            topics_output, notes_output, questions_output, current_analysis,
+            topics_output, notes_output, formulas_output, questions_output, current_analysis,
         ],
     )
     approve_button.click(
         fn=approve_corrected_text,
         inputs=[corrected_text, current_analysis],
-        outputs=[approval_status, topics_output, notes_output, questions_output, current_analysis],
+        outputs=[
+            approval_status, topics_output, notes_output, formulas_output,
+            questions_output, current_analysis,
+        ],
     )
     ask_button.click(
         fn=ask_agent_ui,

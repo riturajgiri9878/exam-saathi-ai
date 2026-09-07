@@ -8,3 +8,13 @@ services:
     envVars:
       - key: EXAM_SAATHI_EMBEDDINGS
         value: disabled
+      - key: REQUIRE_AUTH
+        value: "true"
+      - key: EXAM_SAATHI_USERNAME
+        sync: false
+      - key: EXAM_SAATHI_PASSWORD
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GEMINI_MODEL
+        value: gemini-2.5-flash

@@ -137,11 +137,23 @@ def ocr_markdown(result: dict[str, Any]) -> str:
             "text can still be reviewed below."
         )
     low_words = confidence.get("low_words", [])
+    average = confidence.get("average_confidence")
+    confidence_line = (
+        f"{average}%"
+        if isinstance(average, (int, float))
+        else "Not supplied by Gemini — verify in Human Review"
+    )
     output = (
         "## 👤 OCR Confidence and Human Review\n\n"
-        f"- **Average Confidence:** {confidence['average_confidence']}%\n"
+        f"- **OCR Engine:** {confidence.get('provider', 'Local Tesseract OCR')}\n"
+        f"- **Confidence:** {confidence_line}\n"
         f"- **Status:** {confidence['status']}\n"
     )
+    if confidence.get("provider_error"):
+        output += (
+            "- **Gemini fallback:** Not used — "
+            f"{html.escape(confidence['provider_error'])}\n"
+        )
     if low_words:
         output += "- **Low-confidence words:** " + ", ".join(
             f"{item['word']} ({item['confidence']}%)" for item in low_words
@@ -437,8 +449,9 @@ Exam Saathi विद्यार्थियों के study documents क�
 
         with gr.Tab("📤 Secure Upload"):
             gr.Markdown(
-                "## Upload Study Material\n\nSelect up to 10 PDFs or camera images together. "
-                "Maximum 10 MB per file, 40 MB combined and 50 pages per PDF.",
+            "## Upload Study Material\n\nSelect up to 10 PDFs or camera images together. "
+                "Maximum 10 MB per file, 40 MB combined and 50 pages per PDF. "
+                "Difficult handwriting automatically uses Gemini Vision OCR when configured.",
                 elem_classes=["exam-card"],
             )
             study_file = gr.File(
@@ -508,6 +521,7 @@ Exam Saathi विद्यार्थियों के study documents क�
 ## Student Data Policy
 
 - Uploaded content is processed for the current app session.
+- Low-confidence scanned documents are sent to Google Gemini for OCR when GEMINI_API_KEY is configured.
 - The application does not intentionally publish student documents.
 - Email addresses and Indian mobile numbers are masked in agent requests.
 - Invalid, oversized, password-protected and unsupported files are blocked.

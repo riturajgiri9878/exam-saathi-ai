@@ -6,3 +6,4 @@ sentence-transformers>=3,<6
 pytesseract>=0.3.10,<1
 Pillow>=10,<13
 socksio>=1,<2
+google-genai>=1,<2

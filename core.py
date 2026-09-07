@@ -24,7 +24,9 @@ MAX_BATCH_FILES = 10
 MAX_BATCH_SIZE_MB = 40
 MAX_IMAGE_PIXELS = 40_000_000
 OCR_MAX_DIMENSION = 1800
-OCR_TIMEOUT_SECONDS = 25
+OCR_TIMEOUT_SECONDS = 60
+SCANNED_PDF_RENDER_SCALE = 1.15
+OCR_LANGUAGE = os.environ.get("OCR_LANGUAGE", "eng")
 MAX_TEXT_CHARACTERS = 200_000
 CHUNK_WORD_SIZE = 120
 CHUNK_WORD_OVERLAP = 25
@@ -164,12 +166,12 @@ def _confidence_from_ocr_data(data: dict[str, Any]) -> dict[str, Any]:
 
 
 def run_ocr_once(image: Image.Image) -> tuple[str, dict[str, Any]]:
-    """Extract OCR text and confidence in one Tesseract pass."""
+    """Extract sparse printed/handwritten notes in one CPU-friendly pass."""
     try:
         data = pytesseract.image_to_data(
             image,
-            lang="eng+hin",
-            config="--oem 1 --psm 6",
+            lang=OCR_LANGUAGE,
+            config="--oem 1 --psm 11",
             output_type=pytesseract.Output.DICT,
             timeout=OCR_TIMEOUT_SECONDS,
         )
@@ -217,7 +219,13 @@ def extract_uploaded_content(file_path: str | Path) -> tuple[list[dict[str, Any]
                 cleaned_text = clean_extracted_text(page.get_text("text"))
                 method = "PDF Text"
                 if len(cleaned_text.split()) < 10:
-                    pixmap = page.get_pixmap(matrix=pymupdf.Matrix(2, 2), alpha=False)
+                    pixmap = page.get_pixmap(
+                        matrix=pymupdf.Matrix(
+                            SCANNED_PDF_RENDER_SCALE,
+                            SCANNED_PDF_RENDER_SCALE,
+                        ),
+                        alpha=False,
+                    )
                     with Image.open(io.BytesIO(pixmap.tobytes("png"))) as rendered:
                         image = prepare_image_for_ocr(rendered)
                     cleaned_text, confidence = run_ocr_once(image)

@@ -330,9 +330,14 @@ CUSTOM_CSS = """
 :root, .dark {
     --body-background-fill: #eef2ff !important;
     --body-text-color: #0f172a !important;
+    --background-fill-primary: #ffffff !important;
+    --background-fill-secondary: #eef2ff !important;
     --block-background-fill: #ffffff !important;
     --block-label-text-color: #172033 !important;
     --input-background-fill: #ffffff !important;
+    --border-color-primary: #cbd5e1 !important;
+    --loader-color: #4f46e5 !important;
+    --color-accent: #4f46e5 !important;
 }
 html, body { background: #eef2ff !important; }
 .gradio-container {
@@ -365,6 +370,18 @@ html, body { background: #eef2ff !important; }
     background: white !important; color: #0f172a !important; border-color: #94a3b8 !important;
 }
 .gradio-container .generating { opacity: 1 !important; }
+.gradio-container .eta-bar,
+.gradio-container .progress-level,
+.gradio-container .progress-level-inner {
+    background: #eef2ff !important;
+    color: #0f172a !important;
+    opacity: .96 !important;
+}
+.gradio-container .meta-text,
+.gradio-container .meta-text-center,
+.gradio-container .generating span {
+    color: #0f172a !important;
+}
 #study-upload, #study-upload > div, #study-upload .wrap,
 #study-upload .file-preview, #study-upload .file-preview * {
     background: #ffffff !important; color: #0f172a !important;
@@ -448,6 +465,7 @@ Exam Saathi विद्यार्थियों के study documents क�
                 lines=10,
                 placeholder="Extracted text will appear here.",
                 elem_id="ocr-review",
+                interactive=True,
             )
             approve_button = gr.Button("✅ Approve Corrected Text")
             approval_status = gr.Markdown()

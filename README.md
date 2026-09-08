@@ -1,5 +1,10 @@
 # Exam Saathi AI
 
+Exam Saathi now keeps important source diagrams alongside Smart Notes. Gemini
+identifies useful diagram pages, while the app renders the original PDF page so
+handwritten labels, formulas and arrows are not redrawn or changed. If a preview
+cannot be rendered, text extraction and notes continue instead of failing.
+
 Exam Saathi is a secure, source-based Agentic AI study assistant. A student can
 upload a digital PDF, scanned PDF, or camera image and receive important topics,
 complete revision notes, practice questions, semantic-search results, and
@@ -27,6 +32,8 @@ evidence-based previous-paper trends.
 - `requirements.txt` - Python dependencies.
 - `packages.txt` - system OCR dependencies for supported hosting platforms.
 - `Dockerfile` - container configuration for Google Cloud Run or another container host.
+- `Dockerfile.render` and `render.yaml` - lightweight Plan B configuration for Render Free.
+- `PLAN_B_RENDER.md` - exact Plan B notes and limitations.
 
 ## Run locally
 

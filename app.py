@@ -523,6 +523,7 @@ with gr.Blocks(title="Exam Saathi AI") as demo:
         <div class="exam-header">
           <h1>📘 EXAM SAATHI AI</h1>
           <h2>Secure Agentic AI Study Assistant</h2>
+          <p><strong>Version 1.8 — Reliable Diagram Pages</strong></p>
           <p>PDF/Image → OCR → Human Review → NLP → Embeddings → Smart Notes → Questions → Trends</p>
           {AUTH_CONTROL}
         </div>

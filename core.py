@@ -41,8 +41,8 @@ GEMINI_FALLBACK_THRESHOLD = 60.0
 MAX_TEXT_CHARACTERS = 200_000
 CHUNK_WORD_SIZE = 120
 CHUNK_WORD_OVERLAP = 25
-DIAGRAM_RENDER_SCALE = 1.35
-MAX_DIAGRAM_PREVIEWS = 12
+DIAGRAM_RENDER_SCALE = 1.0
+MAX_DIAGRAM_PREVIEWS = 24
 
 ALLOWED_EXTENSIONS = {".pdf", ".png", ".jpg", ".jpeg"}
 PROJECT_STOP_WORDS = {
@@ -168,6 +168,64 @@ def extract_diagram_description(page_text: str) -> str:
     } or re.match(r"^no (?:meaningful |reliable |visible )?(?:diagram|table)", normalized):
         return ""
     return description[:800]
+
+
+def discover_visual_page_candidates(
+    source_path: str | Path,
+    source_name: str,
+    pages: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Find visual PDF pages even when Gemini omits its diagram heading."""
+    path = Path(source_path)
+    candidates: list[dict[str, Any]] = []
+    page_text = {
+        int(page.get("page_number", 0)): str(page.get("text", ""))
+        for page in pages
+    }
+    visual_words = re.compile(
+        r"\b(?:diagram|figure|fig\.?|graph|plot|curve|lattice|unit cell|"
+        r"crystal|axis|axes|cube|circle|construction|table)\b",
+        flags=re.IGNORECASE,
+    )
+
+    if path.suffix.lower() == ".pdf":
+        document = pymupdf.open(str(path))
+        try:
+            for page_index, pdf_page in enumerate(document):
+                page_number = page_index + 1
+                text = page_text.get(page_number, "")
+                description = extract_diagram_description(text)
+                has_visual_object = bool(pdf_page.get_images(full=True))
+                try:
+                    has_visual_object = has_visual_object or len(pdf_page.get_drawings()) >= 2
+                except Exception:
+                    pass
+                if description or has_visual_object or visual_words.search(text):
+                    candidates.append({
+                        "source_name": source_name,
+                        "source_path": str(path),
+                        "page_number": page_number,
+                        "description": description or (
+                            "Original visual source page. Open it to inspect diagrams, "
+                            "graphs, tables and handwritten labels."
+                        ),
+                        "confirmed_by_gemini": bool(description),
+                    })
+        finally:
+            document.close()
+    else:
+        text = page_text.get(1, "")
+        description = extract_diagram_description(text)
+        candidates.append({
+            "source_name": source_name,
+            "source_path": str(path),
+            "page_number": 1,
+            "description": description or (
+                "Original uploaded study image. Open it to inspect the diagram and labels."
+            ),
+            "confirmed_by_gemini": bool(description),
+        })
+    return candidates
 
 
 def render_diagram_previews(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -912,15 +970,10 @@ def analyze_files(file_paths: list[str | Path] | tuple[str | Path, ...]) -> dict
             file_infos.append(info)
             if confidence:
                 confidence_results.append(confidence)
+            diagram_candidates.extend(
+                discover_visual_page_candidates(path, info["file_name"], pages)
+            )
             for page in pages:
-                diagram_description = extract_diagram_description(page.get("text", ""))
-                if diagram_description:
-                    diagram_candidates.append({
-                        "source_name": info["file_name"],
-                        "source_path": str(path),
-                        "page_number": page["page_number"],
-                        "description": diagram_description,
-                    })
                 readability = page.get("readability", "UNKNOWN")
                 if readability not in page_quality:
                     readability = "UNKNOWN"
@@ -1004,6 +1057,7 @@ def analyze_files(file_paths: list[str | Path] | tuple[str | Path, ...]) -> dict
     }
     diagram_candidates.sort(
         key=lambda item: (
+            not item.get("confirmed_by_gemini", False),
             (item["source_name"], item["page_number"]) not in note_pages,
             item["source_name"],
             item["page_number"],

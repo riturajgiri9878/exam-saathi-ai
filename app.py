@@ -13,27 +13,13 @@ import gradio as gr
 from core import (
     SECURITY_GUARD,
     analyze_approved_text,
-    analyze_files,
+    analyze_file,
     semantic_search,
 )
 
 
 BASE_DIR = Path(__file__).resolve().parent
 REPORTS_DIR = BASE_DIR / "reports"
-
-APP_USERNAME = os.environ.get("EXAM_SAATHI_USERNAME", "").strip()
-APP_PASSWORD = os.environ.get("EXAM_SAATHI_PASSWORD", "").strip()
-REQUIRE_AUTH = os.environ.get("REQUIRE_AUTH", "false").lower() in {
-    "true", "1", "yes", "on"
-}
-
-if REQUIRE_AUTH and not (APP_USERNAME and APP_PASSWORD):
-    raise RuntimeError(
-        "Secure login is required. Set EXAM_SAATHI_USERNAME and "
-        "EXAM_SAATHI_PASSWORD in the hosting environment."
-    )
-
-APP_AUTH = (APP_USERNAME, APP_PASSWORD) if APP_USERNAME and APP_PASSWORD else None
 
 
 def read_text_report(name: str, fallback: str) -> str:
@@ -94,19 +80,6 @@ def notes_markdown(result: dict[str, Any]) -> str:
     return output
 
 
-def formulas_markdown(result: dict[str, Any]) -> str:
-    formulas = result.get("formulas", [])
-    output = "## 📐 Source-Based Formula Sheet\n\n"
-    if not formulas:
-        return output + "No reliable formula was extracted. Check Human Review before studying."
-    for number, item in enumerate(formulas, start=1):
-        output += (
-            f"{number}. `{item['formula']}`  \n"
-            f"   📄 **Source:** {item['source_name']} | Page {item['page_number']}\n\n"
-        )
-    return output
-
-
 def questions_markdown(result: dict[str, Any]) -> str:
     bank = result.get("question_bank", {})
     output = "## ✍️ Generated Question Bank\n\n### Short Questions\n\n"
@@ -131,12 +104,11 @@ def questions_markdown(result: dict[str, Any]) -> str:
 
 def preview_markdown(result: dict[str, Any]) -> str:
     output = "## 📄 Extracted Text Preview\n\n"
-    for document in result.get("documents", [])[:10]:
+    for document in result.get("documents", [])[:3]:
         safe_text = html.escape(document["text"][:1_500])
         output += (
-            f"### {document['source_name']} - Page {document['page_number']}\n\n"
-            f"**Method:** {document['extraction_method']}  \n"
-            f"**Readability:** {document.get('readability', 'UNKNOWN')}\n\n"
+            f"### Page {document['page_number']}\n\n"
+            f"**Method:** {document['extraction_method']}\n\n"
             f"{safe_text}\n\n---\n\n"
         )
     return output
@@ -151,23 +123,11 @@ def ocr_markdown(result: dict[str, Any]) -> str:
             "text can still be reviewed below."
         )
     low_words = confidence.get("low_words", [])
-    average = confidence.get("average_confidence")
-    confidence_line = (
-        f"{average}%"
-        if isinstance(average, (int, float))
-        else "Not supplied by Gemini — verify in Human Review"
-    )
     output = (
         "## 👤 OCR Confidence and Human Review\n\n"
-        f"- **OCR Engine:** {confidence.get('provider', 'Local Tesseract OCR')}\n"
-        f"- **Confidence:** {confidence_line}\n"
+        f"- **Average Confidence:** {confidence['average_confidence']}%\n"
         f"- **Status:** {confidence['status']}\n"
     )
-    if confidence.get("provider_error"):
-        output += (
-            "- **Gemini fallback:** Not used — "
-            f"{html.escape(confidence['provider_error'])}\n"
-        )
     if low_words:
         output += "- **Low-confidence words:** " + ", ".join(
             f"{item['word']} ({item['confidence']}%)" for item in low_words
@@ -176,45 +136,20 @@ def ocr_markdown(result: dict[str, Any]) -> str:
     return output
 
 
-def process_file_ui(file_paths: Any):
+def process_file_ui(file_path: str | None):
     try:
-        if isinstance(file_paths, (str, Path)):
-            normalized_paths = [str(file_paths)]
-        else:
-            normalized_paths = [str(path) for path in (file_paths or [])]
-        result = analyze_files(normalized_paths)
+        result = analyze_file(file_path)
         info = result["file_info"]
-        file_infos = result.get("file_infos", [info])
-        file_list = "\n".join(
-            f"  - {item['file_name']} ({item['size_mb']} MB)"
-            for item in file_infos
-        )
         status = (
-            "## ✅ Files Processed Safely\n\n"
-            f"- **Files accepted:** {len(file_infos)}\n"
-            f"- **Combined size:** {info['size_mb']} MB\n"
+            "## ✅ File Processed Safely\n\n"
+            f"- **File:** {info['file_name']}\n"
+            f"- **File size:** {info['size_mb']} MB\n"
             f"- **Readable pages:** {len(result['documents'])}\n"
             "- **Security:** Passed\n"
-            f"- **NLP mode:** {result['processing_mode']}\n\n"
-            f"**Processed files:**\n{file_list}"
+            f"- **NLP mode:** {result['processing_mode']}"
         )
-        quality = result.get("page_quality", {})
-        if quality:
-            status += (
-                "\n\n**Smart extraction quality:** "
-                f"High {quality.get('HIGH', 0)} | Medium {quality.get('MEDIUM', 0)} | "
-                f"Low {quality.get('LOW', 0)} | "
-                f"Unusable skipped {quality.get('SKIPPED', 0)}"
-            )
-        warnings = result.get("batch_warnings", [])
-        if warnings:
-            status += "\n\n**Skipped files:**\n" + "\n".join(
-                f"- {html.escape(message)}" for message in warnings
-            )
         editable_text = "\n\n".join(
-            f"[{document['source_name']} - Page {document['page_number']}]\n"
-            f"{document['text']}"
-            for document in result["documents"]
+            document["text"] for document in result["documents"]
         )
         return (
             status,
@@ -223,7 +158,6 @@ def process_file_ui(file_paths: Any):
             editable_text,
             topics_markdown(result),
             notes_markdown(result),
-            formulas_markdown(result),
             questions_markdown(result),
             result,
         )
@@ -236,7 +170,6 @@ def process_file_ui(file_paths: Any):
             "",
             DEMO_TOPICS,
             DEMO_NOTES,
-            "## 📐 Formula Sheet\n\nNo reliable formula extracted.",
             DEMO_QUESTIONS,
             {},
         )
@@ -254,14 +187,12 @@ def approve_corrected_text(edited_text: str, current_state: dict[str, Any]):
             "## ✅ Human Review Approved\n\nCorrected text was accepted and NLP results were regenerated.",
             topics_markdown(result),
             notes_markdown(result),
-            formulas_markdown(result),
             questions_markdown(result),
             result,
         )
     except Exception as error:
         return (
             f"## ❌ Approval Failed\n\n{html.escape(str(error))}",
-            gr.skip(),
             gr.skip(),
             gr.skip(),
             gr.skip(),
@@ -368,14 +299,9 @@ CUSTOM_CSS = """
 :root, .dark {
     --body-background-fill: #eef2ff !important;
     --body-text-color: #0f172a !important;
-    --background-fill-primary: #ffffff !important;
-    --background-fill-secondary: #eef2ff !important;
     --block-background-fill: #ffffff !important;
     --block-label-text-color: #172033 !important;
     --input-background-fill: #ffffff !important;
-    --border-color-primary: #cbd5e1 !important;
-    --loader-color: #4f46e5 !important;
-    --color-accent: #4f46e5 !important;
 }
 html, body { background: #eef2ff !important; }
 .gradio-container {
@@ -406,26 +332,6 @@ html, body { background: #eef2ff !important; }
 }
 .gradio-container input, .gradio-container textarea {
     background: white !important; color: #0f172a !important; border-color: #94a3b8 !important;
-}
-.gradio-container .generating { opacity: 1 !important; }
-.gradio-container .eta-bar,
-.gradio-container .progress-level,
-.gradio-container .progress-level-inner {
-    background: #eef2ff !important;
-    color: #0f172a !important;
-    opacity: .96 !important;
-}
-.gradio-container .meta-text,
-.gradio-container .meta-text-center,
-.gradio-container .generating span {
-    color: #0f172a !important;
-}
-#study-upload, #study-upload > div, #study-upload .wrap,
-#study-upload .file-preview, #study-upload .file-preview * {
-    background: #ffffff !important; color: #0f172a !important;
-}
-#ocr-review, #ocr-review > div, #ocr-review textarea {
-    background: #ffffff !important; color: #0f172a !important;
 }
 .gradio-container code { background: #ede9fe !important; color: #5b21b6 !important; }
 footer { display: none !important; }
@@ -475,17 +381,13 @@ Exam Saathi विद्यार्थियों के study documents क�
 
         with gr.Tab("📤 Secure Upload"):
             gr.Markdown(
-            "## Upload Study Material\n\nSelect up to 10 PDFs or camera images together. "
-                "Maximum 10 MB per file, 40 MB combined and 50 pages per PDF. "
-                "Difficult handwriting automatically uses Gemini Vision OCR when configured.",
+                "## Upload Study Material\n\nPDF, scanned PDF, PNG, JPG/JPEG — maximum 10 MB and 50 PDF pages.",
                 elem_classes=["exam-card"],
             )
             study_file = gr.File(
-                label="Upload up to 10 PDFs or Study Images",
+                label="Upload PDF or Study Image",
                 file_types=[".pdf", ".png", ".jpg", ".jpeg"],
                 type="filepath",
-                file_count="multiple",
-                elem_id="study-upload",
             )
             process_button = gr.Button(
                 "🔍 Securely Process and Generate Study Material",
@@ -503,8 +405,6 @@ Exam Saathi विद्यार्थियों के study documents क�
                 label="Review or Correct Extracted Text",
                 lines=10,
                 placeholder="Extracted text will appear here.",
-                elem_id="ocr-review",
-                interactive=True,
             )
             approve_button = gr.Button("✅ Approve Corrected Text")
             approval_status = gr.Markdown()
@@ -514,12 +414,6 @@ Exam Saathi विद्यार्थियों के study documents क�
 
         with gr.Tab("📝 Smart Notes"):
             notes_output = gr.Markdown(DEMO_NOTES, elem_classes=["exam-card"])
-
-        with gr.Tab("📐 Formula Sheet"):
-            formulas_output = gr.Markdown(
-                "## Formula Sheet\n\nUpload study material to extract source-based formulas.",
-                elem_classes=["exam-card"],
-            )
 
         with gr.Tab("✍️ Question Bank"):
             questions_output = gr.Markdown(DEMO_QUESTIONS, elem_classes=["exam-card"])
@@ -553,7 +447,6 @@ Exam Saathi विद्यार्थियों के study documents क�
 ## Student Data Policy
 
 - Uploaded content is processed for the current app session.
-- Low-confidence scanned documents are sent to Google Gemini for OCR when GEMINI_API_KEY is configured.
 - The application does not intentionally publish student documents.
 - Email addresses and Indian mobile numbers are masked in agent requests.
 - Invalid, oversized, password-protected and unsupported files are blocked.
@@ -567,16 +460,13 @@ Exam Saathi विद्यार्थियों के study documents क�
         inputs=[study_file],
         outputs=[
             upload_status, extracted_preview, ocr_status, corrected_text,
-            topics_output, notes_output, formulas_output, questions_output, current_analysis,
+            topics_output, notes_output, questions_output, current_analysis,
         ],
     )
     approve_button.click(
         fn=approve_corrected_text,
         inputs=[corrected_text, current_analysis],
-        outputs=[
-            approval_status, topics_output, notes_output, formulas_output,
-            questions_output, current_analysis,
-        ],
+        outputs=[approval_status, topics_output, notes_output, questions_output, current_analysis],
     )
     ask_button.click(
         fn=ask_agent_ui,
@@ -591,7 +481,7 @@ Exam Saathi विद्यार्थियों के study documents क�
 
 
 if __name__ == "__main__":
-    demo.queue(default_concurrency_limit=1).launch(
+    demo.queue(default_concurrency_limit=4).launch(
         server_name="0.0.0.0",
         server_port=int(os.environ.get("PORT", "7860")),
         show_error=False,
@@ -601,6 +491,4 @@ if __name__ == "__main__":
             neutral_hue="slate",
         ),
         css=CUSTOM_CSS,
-        auth=APP_AUTH,
-        auth_message="Exam Saathi is private. Enter the credentials shared by the project owner.",
     )

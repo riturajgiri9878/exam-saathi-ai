@@ -27,8 +27,6 @@ evidence-based previous-paper trends.
 - `requirements.txt` - Python dependencies.
 - `packages.txt` - system OCR dependencies for supported hosting platforms.
 - `Dockerfile` - container configuration for Google Cloud Run or another container host.
-- `Dockerfile.render` and `render.yaml` - lightweight Plan B configuration for Render Free.
-- `PLAN_B_RENDER.md` - exact Plan B notes and limitations.
 
 ## Run locally
 

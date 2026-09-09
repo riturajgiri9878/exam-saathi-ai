@@ -655,6 +655,66 @@ html, body { background: #eef2ff !important; }
 }
 .gradio-container code { background: #ede9fe !important; color: #5b21b6 !important; }
 footer { display: none !important; }
+/* Student palette, scoped to the Gradio root so OS dark mode cannot
+   override nested file rows and download controls. */
+html, body {
+    background: #e8ddfa !important;
+    background-image: radial-gradient(ellipse at 8% 10%, #d6c3ff 0, transparent 48%),
+        radial-gradient(ellipse at 92% 35%, #bcf0e3 0, transparent 48%),
+        linear-gradient(150deg, #eee5ff, #e0f4ef 62%, #ffe3d6) !important;
+    background-attachment: fixed !important;
+}
+.gradio-container, .gradio-container.dark, .dark .gradio-container {
+    color-scheme: light !important;
+    --body-background-fill: #eee5ff !important;
+    --body-text-color: #20233e !important;
+    --background-fill-primary: #f3edff !important;
+    --background-fill-secondary: #e7f5ef !important;
+    --block-background-fill: #f3edff !important;
+    --block-label-background-fill: #e2d5fa !important;
+    --block-label-text-color: #35215e !important;
+    --block-title-text-color: #35215e !important;
+    --input-background-fill: #faf6ff !important;
+    --input-background-fill-focus: #faf6ff !important;
+    --input-text-color: #20233e !important;
+    --link-text-color: #433087 !important;
+    --button-secondary-background-fill: #dcd3f4 !important;
+    --button-secondary-background-fill-hover: #cfc1ef !important;
+    --button-secondary-text-color: #30204f !important;
+    --border-color-primary: #c6b6df !important;
+    background: transparent !important;
+}
+.gradio-container .exam-card {
+    background: linear-gradient(125deg, #f1e8ff, #e5f3f0) !important;
+    border-color: #cbbbe5 !important;
+}
+.gradio-container .security-card { background: #dff4e9 !important; }
+.gradio-container .warning-card { background: #fff0dc !important; }
+.gradio-container input, .gradio-container textarea,
+#ocr-review, #ocr-review > div, #ocr-review textarea {
+    background: #faf6ff !important; color: #20233e !important;
+}
+.gradio-container button.secondary {
+    background: #dcd3f4 !important; color: #30204f !important;
+}
+.gradio-container .study-file,
+.gradio-container .study-file :is(div,table,thead,tbody,tr,td,th,a,button,span),
+#study-upload, #study-upload :is(div,table,thead,tbody,tr,td,th,a,button,span) {
+    background: #e7f5ef !important;
+    color: #193d38 !important;
+    opacity: 1 !important;
+}
+.gradio-container .study-file a, #study-upload a {
+    text-decoration: underline !important;
+    overflow-wrap: anywhere !important;
+}
+.gradio-container .study-file svg, #study-upload svg {
+    color: #315b51 !important;
+}
+.gradio-container :is(button,a,input,summary):focus-visible {
+    outline: 3px solid #7351b8 !important; outline-offset: 3px;
+}
+.exam-header strong { color: #fff !important; }
 @media (max-width: 768px) {
     .gradio-container { padding: 8px !important; }
     .exam-header { padding: 20px 10px !important; }
@@ -675,7 +735,7 @@ with gr.Blocks(title="Exam Saathi AI") as demo:
         <div class="exam-header">
           <h1>📘 EXAM SAATHI AI</h1>
           <h2>Secure Agentic AI Study Assistant</h2>
-          <p><strong>Version 2.0 — Gen-Z Study Coach</strong></p>
+          <p><strong>Version 2.2 — Pastel Study Space</strong></p>
           <p>PDF/Image → OCR → Human Review → NLP → Embeddings → Smart Notes → Questions → Trends</p>
           {AUTH_CONTROL}
         </div>
@@ -864,7 +924,7 @@ Exam Saathi विद्यार्थियों के study documents क�
             guide_images = gr.Checkbox(label="Include original diagram pages (larger download)", value=True)
             guide_button = gr.Button("📘 Create Complete HTML Guide", variant="primary")
             guide_status = gr.Markdown()
-            guide_file = gr.File(label="Download HTML Study Guide", interactive=False)
+            guide_file = gr.File(label="Download HTML Study Guide", interactive=False, elem_classes=["study-file"])
             gr.Markdown(
                 "## Lightweight Study Pack\n\nNo diagram loading—only important text, formulas and questions.",
                 elem_classes=["exam-card"],
@@ -873,7 +933,7 @@ Exam Saathi विद्यार्थियों के study documents क�
             low_data_output = gr.Markdown(elem_classes=["exam-card"])
             friend_quiz_button = gr.Button("📤 Create Friend Quiz File")
             friend_quiz_status = gr.Markdown()
-            friend_quiz_file = gr.File(label="Download and share this quiz", interactive=False)
+            friend_quiz_file = gr.File(label="Download and share this quiz", interactive=False, elem_classes=["study-file"])
 
         with gr.Tab("🛡️ Security & Privacy"):
             security_output = gr.Markdown(security_dashboard(), elem_classes=["security-card"])

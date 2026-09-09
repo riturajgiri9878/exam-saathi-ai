@@ -550,30 +550,14 @@ def ask_agent_ui(
         )
         header += "\n".join(f"{number}. {step}" for number, step in enumerate(plan, 1))
 
-        if intent == "trend":
-            content = TREND_REPORT
-        elif intent == "quiz":
-            content = questions_markdown(result) if result.get("question_bank") else DEMO_QUESTIONS
-        elif intent == "notes":
-            content = notes_markdown(result) if result.get("notes") else DEMO_NOTES
-        else:
-            chunks = result.get("chunks") or DEMO_CHUNKS
-            matches = semantic_search(safe_request, chunks, top_k=3)
-            generated = answer_from_source_evidence(safe_request, matches, language)
-            if generated:
-                content = f"## 🎙️ {language} Source-Based Answer\n\n{generated}"
-            else:
-                content = "## 🔎 Source-Grounded Search Results\n\n"
-                for match in matches:
-                    content += (
-                        f"### Result {match['rank']} — Similarity `{match['score']}`\n\n"
-                        f"{match['text']}\n\n"
-                        f"📄 **Source:** {match['source_name']} | Page {match['page_number']}\n\n"
-                    )
-                if not matches:
-                    content += "No relevant source evidence was found."
-
-        return f"{header}\n\n{content}"
+        chunks = result.get('chunks', [])
+        if not chunks:
+            return 'Please process your study material first.'
+        matches = semantic_search(safe_request, chunks, top_k=4)
+        generated = answer_from_source_evidence(safe_request, matches, language)
+        if not generated:
+            return 'Could not verify an answer in the selected language. Please retry or check Gemini access. Your notes are unchanged.'
+        return generated
     except Exception as error:
         return (
             "## 🛡️ Request Blocked Safely\n\n"
@@ -822,7 +806,7 @@ with gr.Blocks(title="Exam Saathi AI") as demo:
         <div class="exam-header">
           <h1>📘 EXAM SAATHI AI</h1>
           <h2>Secure Agentic AI Study Assistant</h2>
-          <p><strong>Version 2.7 — HTML Notes & Odia Teacher</strong></p>
+          <p><strong>Version 2.8 — All Supported Languages</strong></p>
           <p>PDF/Image → OCR → Human Review → NLP → Embeddings → Smart Notes → Questions → Trends</p>
           {AUTH_CONTROL}
         </div>

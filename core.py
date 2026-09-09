@@ -45,7 +45,7 @@ CHUNK_WORD_OVERLAP = 25
 DIAGRAM_RENDER_SCALE = 1.0
 MAX_DIAGRAM_PREVIEWS = 24
 
-ALLOWED_EXTENSIONS = {".pdf", ".png", ".jpg", ".jpeg"}
+ALLOWED_EXTENSIONS = {".pdf", ".png", ".jpg", ".jpeg", ".html", ".htm"}
 PROJECT_STOP_WORDS = {
     "exam", "saathi", "class", "notes", "note", "page", "question",
     "questions", "practice", "sample", "diagram", "figure", "chapter",
@@ -91,13 +91,16 @@ def validate_uploaded_file(file_path: str | Path | None) -> dict[str, Any]:
 
     extension = path.suffix.lower()
     if extension not in ALLOWED_EXTENSIONS:
-        raise ValueError("Only PDF, PNG, JPG and JPEG files are allowed.")
+        raise ValueError("Only PDF, HTML, PNG, JPG and JPEG files are allowed.")
 
     size_mb = path.stat().st_size / (1024 * 1024)
     if size_mb > MAX_FILE_SIZE_MB:
         raise ValueError(f"Maximum allowed file size is {MAX_FILE_SIZE_MB} MB.")
 
-    if extension == ".pdf":
+    if extension in {'.html','.htm'}:
+        from html_notes import extract_html_notes
+        extract_html_notes(path)
+    elif extension == ".pdf":
         with path.open("rb") as file:
             if file.read(5) != b"%PDF-":
                 raise ValueError("The uploaded file is not a valid PDF.")
@@ -564,8 +567,12 @@ def answer_from_source_evidence(
     language: str = "Hinglish",
 ) -> str:
     """Create a short answer grounded only in retrieved uploaded-document evidence."""
+    from html_notes import odia_requested, has_odia_prose
+    wants_odia = odia_requested(language, question)
+    if wants_odia:
+        language = 'Odia (ଓଡ଼ିଆ). Write all explanations and headings in Odia script, NOT Hindi or Devanagari. Keep filenames, equations and necessary technical terms unchanged'
     if not evidence:
-        return "Uploaded notes में इस सवाल का reliable evidence नहीं मिला।"
+        return 'ଅପଲୋଡ୍ କରାଯାଇଥିବା ନୋଟ୍‌ରେ ଏହି ପ୍ରଶ୍ନ ପାଇଁ ପର୍ଯ୍ୟାପ୍ତ ତଥ୍ୟ ନାହିଁ।' if wants_odia else 'No reliable evidence found in the uploaded notes.'
     if not GEMINI_API_KEY:
         return ""
     try:
@@ -605,7 +612,7 @@ SOURCE EVIDENCE:
                 config=types.GenerateContentConfig(max_output_tokens=1200),
             )
             answer = clean_extracted_text(getattr(response, "text", ""))
-            if answer:
+            if answer and (not wants_odia or has_odia_prose(answer)):
                 return answer
         except Exception:
             continue
@@ -627,6 +634,12 @@ def extract_uploaded_content(file_path: str | Path) -> tuple[list[dict[str, Any]
     gemini_error: str | None = None
 
     expected_pages = 1
+    if extension in {'.html','.htm'}:
+        from html_notes import extract_html_notes
+        text = extract_html_notes(file_path)
+        if len(text)>MAX_TEXT_CHARACTERS:
+            raise ValueError('HTML text exceeds the analysis size limit.')
+        return [{'page_number':1,'text':text,'extraction_method':'HTML Text (single document; no PDF pagination)'}], None
     if extension == ".pdf":
         document = pymupdf.open(str(file_path))
         try:
@@ -1079,13 +1092,12 @@ def analyze_files(file_paths: list[str | Path] | tuple[str | Path, ...]) -> dict
         try:
             info = validate_uploaded_file(path)
             pages, confidence = extract_uploaded_content(path)
-            source_type = "PDF" if info["extension"] == ".pdf" else "Camera Image"
+            source_type = 'HTML' if info['extension'] in {'.html','.htm'} else ("PDF" if info["extension"] == ".pdf" else "Camera Image")
             file_infos.append(info)
             if confidence:
                 confidence_results.append(confidence)
-            diagram_candidates.extend(
-                discover_visual_page_candidates(path, info["file_name"], pages)
-            )
+            if source_type != 'HTML':
+                diagram_candidates.extend(discover_visual_page_candidates(path, info['file_name'], pages))
             for page in pages:
                 readability = page.get("readability", "UNKNOWN")
                 if readability not in page_quality:

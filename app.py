@@ -822,7 +822,7 @@ with gr.Blocks(title="Exam Saathi AI") as demo:
         <div class="exam-header">
           <h1>📘 EXAM SAATHI AI</h1>
           <h2>Secure Agentic AI Study Assistant</h2>
-          <p><strong>Version 2.6 — Class Upload & Teacher</strong></p>
+          <p><strong>Version 2.7 — HTML Notes & Odia Teacher</strong></p>
           <p>PDF/Image → OCR → Human Review → NLP → Embeddings → Smart Notes → Questions → Trends</p>
           {AUTH_CONTROL}
         </div>
@@ -865,15 +865,15 @@ Exam Saathi विद्यार्थियों के study documents क�
                 elem_classes=["exam-card"],
             )
             choose_files = gr.UploadButton(
-                "📂 फाइल चुनें / Choose PDFs or Photos",
-                file_types=[".pdf", ".png", ".jpg", ".jpeg"],
+                "📂 Choose PDF, HTML or Photos",
+                file_types=[".pdf", ".html", ".htm", ".png", ".jpg", ".jpeg"],
                 file_count="multiple",
                 type="filepath",
                 elem_id="choose-study-files",
             )
             study_file = gr.File(
                 label="Upload up to 10 PDFs or Study Images",
-                file_types=[".pdf", ".png", ".jpg", ".jpeg"],
+                file_types=[".pdf", ".html", ".htm", ".png", ".jpg", ".jpeg"],
                 type="filepath",
                 file_count="multiple",
                 elem_id="study-upload",
@@ -903,15 +903,16 @@ Exam Saathi विद्यार्थियों के study documents क�
         with gr.Tab("📖 Understand Today’s Class"):
             gr.Markdown('## Understand Today’s Class\n\n**1. Choose your PDF or notebook photos → 2. Process Class Notes → 3. Ask your question.**\n\nAlready processed notes in Secure Upload? You can ask directly below. Both tabs use the latest processed material. Source diagrams are in Smart Notes.')
             class_choose_files = gr.UploadButton(
-                '📂 Choose Class PDFs / Notebook Photos',
-                file_types=['.pdf','.png','.jpg','.jpeg'],file_count='multiple',
+                '📂 Choose Class PDF / HTML / Notebook Photos',
+                file_types=['.pdf','.html','.htm','.png','.jpg','.jpeg'],file_count='multiple',
                 type='filepath',variant='primary',
             )
             class_files = gr.File(label='Selected class files (up to 10)',
-                file_types=['.pdf','.png','.jpg','.jpeg'],file_count='multiple',
+                file_types=['.pdf','.html','.htm','.png','.jpg','.jpeg'],file_count='multiple',
                 type='filepath',elem_classes=['study-file'])
             class_process = gr.Button('🔍 Process Class Notes',variant='primary')
             class_upload_status = gr.Markdown('Choose files above, then press Process Class Notes. Wait for confirmation before asking.')
+            gr.Markdown('HTML files are read as text without running scripts or loading external images. HTML source references use document 1, not actual PDF page numbers. For diagrams, also upload a PDF or image.')
             gr.Markdown('### Ask and learn\n\nStory → concept → example → one practice question. Stories are illustrative analogies, not source evidence.')
             teacher_language = gr.Dropdown(choices=LANGUAGES,value='Hinglish',label='Teaching language')
             teacher_mic = gr.Audio(sources=['microphone'],type='filepath',label='Speak your doubt')

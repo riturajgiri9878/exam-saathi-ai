@@ -14,7 +14,22 @@ from core import (
     SECURITY_GUARD,
     analyze_approved_text,
     analyze_files,
+    answer_from_source_evidence,
     semantic_search,
+    transcribe_study_audio,
+)
+from study_features import (
+    answer_matches,
+    build_exam_mode,
+    build_flashcards,
+    build_quiz_items,
+    build_revision_plan,
+    diagram_learning_markdown,
+    export_friend_quiz,
+    flashcard_view,
+    low_data_markdown,
+    progress_markdown,
+    quiz_view,
 )
 
 
@@ -347,7 +362,120 @@ def detect_intent(request_text: str) -> tuple[str, str, list[str]]:
     ]
 
 
-def ask_agent_ui(request_text: str, current_state: dict[str, Any], request: gr.Request):
+def transcribe_voice_ui(audio_path: str | None, language: str):
+    try:
+        transcript = transcribe_study_audio(audio_path, language)
+        return transcript, "✅ Voice question ready. अब **Ask Exam Saathi** दबाएँ।"
+    except Exception as error:
+        return gr.skip(), f"❌ {html.escape(str(error))}"
+
+
+def start_flashcards_ui(result: dict[str, Any], progress: dict[str, Any]):
+    state = {"cards": build_flashcards(result or {}), "index": 0}
+    return state, flashcard_view(state), progress_markdown(progress or {})
+
+
+def reveal_flashcard_ui(state: dict[str, Any], progress: dict[str, Any]):
+    progress = dict(progress or {})
+    if state.get("cards"):
+        progress["xp"] = int(progress.get("xp", 0)) + 2
+    return flashcard_view(state or {}, reveal=True), progress_markdown(progress), progress
+
+
+def next_flashcard_ui(state: dict[str, Any]):
+    state = dict(state or {})
+    cards = state.get("cards", [])
+    if cards:
+        state["index"] = (int(state.get("index", 0)) + 1) % len(cards)
+    return state, flashcard_view(state)
+
+
+def start_quiz_ui(result: dict[str, Any], progress: dict[str, Any]):
+    state = {"items": build_quiz_items(result or {}), "index": 0, "checked": False}
+    return state, quiz_view(state), "", "", progress_markdown(progress or {})
+
+
+def check_quiz_ui(answer: str, state: dict[str, Any], progress: dict[str, Any]):
+    state = dict(state or {})
+    items = state.get("items", [])
+    if not items:
+        return "पहले quiz शुरू करें।", progress_markdown(progress or {}), progress or {}, state
+    if state.get("checked"):
+        return "इस question को check कर चुके हैं। अब **Next Question** दबाएँ।", progress_markdown(progress or {}), progress or {}, state
+    item = items[int(state.get("index", 0)) % len(items)]
+    correct = any(
+        answer_matches(answer, accepted)
+        for accepted in item.get("accepted_answers", [item["answer"]])
+    )
+    progress = dict(progress or {})
+    progress["attempted"] = int(progress.get("attempted", 0)) + 1
+    if correct:
+        progress["correct"] = int(progress.get("correct", 0)) + 1
+        progress["xp"] = int(progress.get("xp", 0)) + 10
+        heading = "✅ Correct! +10 XP"
+    else:
+        progress["xp"] = int(progress.get("xp", 0)) + 2
+        weak = list(progress.get("weak_topics", []))
+        weak.append(item["answer"][:80])
+        progress["weak_topics"] = weak[-10:]
+        heading = "🔁 Needs Review +2 XP"
+    state["checked"] = True
+    feedback = (
+        f"### {heading}\n\n**Expected answer:** {item['answer']}\n\n"
+        f"📄 **Source:** {item['source']}"
+    )
+    return feedback, progress_markdown(progress), progress, state
+
+
+def next_quiz_ui(state: dict[str, Any]):
+    state = dict(state or {})
+    items = state.get("items", [])
+    if items:
+        state["index"] = (int(state.get("index", 0)) + 1) % len(items)
+    state["checked"] = False
+    return state, quiz_view(state), "", ""
+
+
+def export_friend_quiz_ui(result: dict[str, Any]):
+    try:
+        return export_friend_quiz(result or {}), "✅ Quiz file ready. इसे WhatsApp/email से दोस्त को भेज सकते हैं।"
+    except Exception as error:
+        return gr.skip(), f"❌ {html.escape(str(error))}"
+
+
+def notes_language_ui(result: dict[str, Any], language: str):
+    result = result or {}
+    if not result.get("notes"):
+        return "## 📝 Smart Notes\n\nपहले study material process करें।"
+    if language == "Exam English":
+        return notes_markdown(result)
+    evidence = [
+        {
+            "text": note["text"],
+            "source_name": note["source_name"],
+            "page_number": note["page_number"],
+        }
+        for note in result["notes"]
+    ]
+    request = (
+        "Rewrite every supplied smart note as a short, exam-useful numbered note. "
+        "Preserve formulas and facts exactly. Keep the filename and page number beside each note."
+    )
+    generated = answer_from_source_evidence(request, evidence, language)
+    if generated:
+        return f"## 📝 Smart Notes — {language}\n\n{generated}"
+    return (
+        notes_markdown(result)
+        + "\n\n> Language conversion अभी उपलब्ध नहीं है; Gemini API configuration check करें।"
+    )
+
+
+def ask_agent_ui(
+    request_text: str,
+    current_state: dict[str, Any],
+    language: str,
+    request: gr.Request,
+):
     session_id = getattr(getattr(request, "client", None), "host", "anonymous")
     try:
         safe_request = SECURITY_GUARD.check(request_text, session_id)
@@ -372,15 +500,19 @@ def ask_agent_ui(request_text: str, current_state: dict[str, Any], request: gr.R
         else:
             chunks = result.get("chunks") or DEMO_CHUNKS
             matches = semantic_search(safe_request, chunks, top_k=3)
-            content = "## 🔎 Source-Grounded Search Results\n\n"
-            for match in matches:
-                content += (
-                    f"### Result {match['rank']} — Similarity `{match['score']}`\n\n"
-                    f"{match['text']}\n\n"
-                    f"📄 **Source:** {match['source_name']} | Page {match['page_number']}\n\n"
-                )
-            if not matches:
-                content += "No relevant source evidence was found."
+            generated = answer_from_source_evidence(safe_request, matches, language)
+            if generated:
+                content = f"## 🎙️ {language} Source-Based Answer\n\n{generated}"
+            else:
+                content = "## 🔎 Source-Grounded Search Results\n\n"
+                for match in matches:
+                    content += (
+                        f"### Result {match['rank']} — Similarity `{match['score']}`\n\n"
+                        f"{match['text']}\n\n"
+                        f"📄 **Source:** {match['source_name']} | Page {match['page_number']}\n\n"
+                    )
+                if not matches:
+                    content += "No relevant source evidence was found."
 
         return f"{header}\n\n{content}"
     except Exception as error:
@@ -492,8 +624,17 @@ html, body { background: #eef2ff !important; }
     color: #0f172a !important;
 }
 #study-upload, #study-upload > div, #study-upload .wrap,
-#study-upload .file-preview, #study-upload .file-preview * {
+#study-upload .file-preview, #study-upload .file-preview *,
+#study-upload .upload-container, #study-upload .upload-container *,
+#study-upload [data-testid="file"], #study-upload [data-testid="file"] * {
     background: #ffffff !important; color: #0f172a !important;
+}
+#study-upload button, #study-upload a {
+    color: #0f172a !important;
+}
+#study-upload .progress-text, #study-upload .eta-bar,
+#study-upload .progress-level, #study-upload .progress-level-inner {
+    background: #eef2ff !important; color: #0f172a !important;
 }
 #ocr-review, #ocr-review > div, #ocr-review textarea {
     background: #ffffff !important; color: #0f172a !important;
@@ -517,13 +658,16 @@ footer { display: none !important; }
 
 with gr.Blocks(title="Exam Saathi AI") as demo:
     current_analysis = gr.State({})
+    flashcard_state = gr.State({"cards": [], "index": 0})
+    quiz_state = gr.State({"items": [], "index": 0, "checked": False})
+    progress_state = gr.State({"xp": 0, "attempted": 0, "correct": 0, "weak_topics": []})
 
     gr.HTML(
         f"""
         <div class="exam-header">
           <h1>📘 EXAM SAATHI AI</h1>
           <h2>Secure Agentic AI Study Assistant</h2>
-          <p><strong>Version 1.8 — Reliable Diagram Pages</strong></p>
+          <p><strong>Version 2.0 — Gen-Z Study Coach</strong></p>
           <p>PDF/Image → OCR → Human Review → NLP → Embeddings → Smart Notes → Questions → Trends</p>
           {AUTH_CONTROL}
         </div>
@@ -543,6 +687,10 @@ Exam Saathi विद्यार्थियों के study documents क�
 - TF-IDF topics and sentence embeddings
 - Complete smart notes with filename and page references
 - Original source diagrams with descriptions, page references and zoom
+- 15-minute exam sprint, flashcards and active-recall quiz
+- Hinglish/Hindi/English answers with optional microphone input
+- Multi-image notebook scanner with auto-crop and enhancement
+- Session XP, revision planner, low-data pack and private friend quiz export
 - Short, long and MCQ practice
 - Previous-paper trend analysis
 - Supervisor, specialist and reviewer workflow
@@ -590,11 +738,54 @@ Exam Saathi विद्यार्थियों के study documents क�
             approve_button = gr.Button("✅ Approve Corrected Text")
             approval_status = gr.Markdown()
 
+        with gr.Tab("⚡ Exam Mode"):
+            gr.Markdown(
+                "## Last-Minute Exam Mode\n\nअपना available time चुनें। App केवल highest-priority revision देगा।",
+                elem_classes=["exam-card"],
+            )
+            exam_minutes = gr.Slider(10, 60, value=15, step=5, label="Available minutes")
+            exam_mode_button = gr.Button("⚡ Build My Exam Sprint", variant="primary")
+            exam_mode_output = gr.Markdown("Process study material first.", elem_classes=["exam-card"])
+
+        with gr.Tab("🃏 Flashcards"):
+            flashcard_output = gr.Markdown(
+                "## Swipe Flashcards\n\nProcess material, then start flashcards.",
+                elem_classes=["exam-card"],
+            )
+            with gr.Row():
+                start_flashcards = gr.Button("▶️ Start Cards")
+                reveal_flashcard = gr.Button("👀 Reveal Answer", variant="primary")
+                next_flashcard = gr.Button("➡️ Next Card")
+            flash_progress = gr.Markdown(progress_markdown({}), elem_classes=["security-card"])
+
+        with gr.Tab("🧠 Active Recall"):
+            quiz_question = gr.Markdown(
+                "## Active Recall Quiz\n\nProcess material, then start the quiz.",
+                elem_classes=["exam-card"],
+            )
+            quiz_answer = gr.Textbox(
+                label="Your answer (option number, keyword or short answer)",
+                lines=2,
+            )
+            with gr.Row():
+                start_quiz = gr.Button("▶️ Start Quiz")
+                check_quiz = gr.Button("✅ Check Answer", variant="primary")
+                next_quiz = gr.Button("➡️ Next Question")
+            quiz_feedback = gr.Markdown()
+            quiz_progress = gr.Markdown(progress_markdown({}), elem_classes=["security-card"])
+
         with gr.Tab("🔑 Important Topics"):
             topics_output = gr.Markdown(DEMO_TOPICS, elem_classes=["exam-card"])
 
         with gr.Tab("📝 Smart Notes"):
             notes_output = gr.Markdown(DEMO_NOTES, elem_classes=["exam-card"])
+            with gr.Row():
+                notes_language = gr.Dropdown(
+                    choices=["Hinglish", "Simple Hindi", "Exam English"],
+                    value="Exam English",
+                    label="Notes language",
+                )
+                notes_language_button = gr.Button("🌐 Convert Notes Language")
             diagram_info = gr.Markdown(
                 "## 📐 Important Diagrams\n\nUpload study material to detect source diagrams.",
                 elem_classes=["exam-card"],
@@ -604,6 +795,11 @@ Exam Saathi विद्यार्थियों के study documents क�
                 columns=2,
                 object_fit="contain",
                 elem_id="diagram-gallery",
+            )
+            diagram_challenge_button = gr.Button("🧠 Start Diagram Challenge")
+            diagram_challenge = gr.Markdown(
+                "Diagram process होने के बाद challenge शुरू करें।",
+                elem_classes=["exam-card"],
             )
 
         with gr.Tab("📐 Formula Sheet"):
@@ -628,13 +824,42 @@ Exam Saathi विद्यार्थियों के study documents क�
                 "`Show previous-paper trends`, or `How is DNA copied?`",
                 elem_classes=["exam-card"],
             )
-            request_input = gr.Textbox(label="Enter Your Study Request", lines=3)
+            answer_language = gr.Dropdown(
+                choices=["Hinglish", "Simple Hindi", "Exam English"],
+                value="Hinglish",
+                label="Answer language",
+            )
+            voice_input = gr.Audio(
+                sources=["microphone"],
+                type="filepath",
+                label="🎙️ Record your question — typing is optional",
+            )
+            transcribe_button = gr.Button("🎙️ Convert Voice to Question")
+            voice_status = gr.Markdown()
+            request_input = gr.Textbox(label="Your Study Question", lines=3)
             ask_button = gr.Button(
                 "🚀 Ask Exam Saathi",
                 variant="primary",
                 elem_classes=["primary-button"],
             )
             agent_output = gr.Markdown("Agent response will appear here.", elem_classes=["exam-card"])
+
+        with gr.Tab("📅 Revision Planner"):
+            planner_days = gr.Slider(1, 14, value=5, step=1, label="Days remaining")
+            planner_minutes = gr.Slider(15, 180, value=45, step=15, label="Minutes per day")
+            planner_button = gr.Button("📅 Create Revision Plan", variant="primary")
+            planner_output = gr.Markdown("Process study material first.", elem_classes=["exam-card"])
+
+        with gr.Tab("📱 Low Data & Share"):
+            gr.Markdown(
+                "## Lightweight Study Pack\n\nNo diagram loading—only important text, formulas and questions.",
+                elem_classes=["exam-card"],
+            )
+            low_data_button = gr.Button("📱 Generate Low-Data Notes")
+            low_data_output = gr.Markdown(elem_classes=["exam-card"])
+            friend_quiz_button = gr.Button("📤 Create Friend Quiz File")
+            friend_quiz_status = gr.Markdown()
+            friend_quiz_file = gr.File(label="Download and share this quiz", interactive=False)
 
         with gr.Tab("🛡️ Security & Privacy"):
             security_output = gr.Markdown(security_dashboard(), elem_classes=["security-card"])
@@ -645,7 +870,10 @@ Exam Saathi विद्यार्थियों के study documents क�
 
 - Uploaded content is processed for the current app session.
 - Low-confidence scanned documents are sent to Google Gemini for OCR when GEMINI_API_KEY is configured.
+- Recorded voice is sent to Google Gemini only when the student presses Convert Voice; it is used to create the question transcript.
 - The application does not intentionally publish student documents.
+- Friend quiz export contains generated questions, answers and source references—not the original uploaded PDF.
+- XP and weak-topic progress are session-only and are cleared when the session ends.
 - Email addresses and Indian mobile numbers are masked in agent requests.
 - Invalid, oversized, password-protected and unsupported files are blocked.
 - Administrators should use encrypted storage and access controls before enabling permanent user accounts.
@@ -672,10 +900,79 @@ Exam Saathi विद्यार्थियों के study documents क�
         ],
         show_progress="minimal",
     )
+    exam_mode_button.click(
+        fn=build_exam_mode,
+        inputs=[current_analysis, exam_minutes],
+        outputs=[exam_mode_output],
+        show_progress="minimal",
+    )
+    start_flashcards.click(
+        fn=start_flashcards_ui,
+        inputs=[current_analysis, progress_state],
+        outputs=[flashcard_state, flashcard_output, flash_progress],
+    )
+    reveal_flashcard.click(
+        fn=reveal_flashcard_ui,
+        inputs=[flashcard_state, progress_state],
+        outputs=[flashcard_output, flash_progress, progress_state],
+    )
+    next_flashcard.click(
+        fn=next_flashcard_ui,
+        inputs=[flashcard_state],
+        outputs=[flashcard_state, flashcard_output],
+    )
+    start_quiz.click(
+        fn=start_quiz_ui,
+        inputs=[current_analysis, progress_state],
+        outputs=[quiz_state, quiz_question, quiz_answer, quiz_feedback, quiz_progress],
+    )
+    check_quiz.click(
+        fn=check_quiz_ui,
+        inputs=[quiz_answer, quiz_state, progress_state],
+        outputs=[quiz_feedback, quiz_progress, progress_state, quiz_state],
+    )
+    next_quiz.click(
+        fn=next_quiz_ui,
+        inputs=[quiz_state],
+        outputs=[quiz_state, quiz_question, quiz_answer, quiz_feedback],
+    )
+    diagram_challenge_button.click(
+        fn=diagram_learning_markdown,
+        inputs=[current_analysis],
+        outputs=[diagram_challenge],
+    )
+    notes_language_button.click(
+        fn=notes_language_ui,
+        inputs=[current_analysis, notes_language],
+        outputs=[notes_output],
+        show_progress="minimal",
+    )
+    transcribe_button.click(
+        fn=transcribe_voice_ui,
+        inputs=[voice_input, answer_language],
+        outputs=[request_input, voice_status],
+        show_progress="minimal",
+    )
     ask_button.click(
         fn=ask_agent_ui,
-        inputs=[request_input, current_analysis],
+        inputs=[request_input, current_analysis, answer_language],
         outputs=[agent_output],
+        show_progress="minimal",
+    )
+    planner_button.click(
+        fn=build_revision_plan,
+        inputs=[current_analysis, planner_days, planner_minutes],
+        outputs=[planner_output],
+    )
+    low_data_button.click(
+        fn=low_data_markdown,
+        inputs=[current_analysis],
+        outputs=[low_data_output],
+    )
+    friend_quiz_button.click(
+        fn=export_friend_quiz_ui,
+        inputs=[current_analysis],
+        outputs=[friend_quiz_file, friend_quiz_status],
     )
     refresh_security.click(fn=security_dashboard, inputs=[], outputs=[security_output])
 

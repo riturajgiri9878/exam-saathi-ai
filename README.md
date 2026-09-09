@@ -1,4 +1,19 @@
-# Exam Saathi AI
+# Exam Saathi AI — Version 2.0 Gen-Z Study Coach
+
+## Version 2.0 features
+
+- 10–60 minute last-minute exam sprint with priority topics, notes, formulas and questions.
+- Tap-to-reveal flashcards and active-recall MCQ practice with session XP and weak-topic tracking.
+- Diagram gallery using original PDF pages plus a hide/reveal diagram challenge.
+- Microphone question transcription and source-grounded answers in Hinglish, Simple Hindi or Exam English.
+- Batch notebook scanning for up to 10 PDFs/images, including image auto-crop and enhancement.
+- Smart revision planner, low-data revision pack and downloadable private friend quiz HTML.
+- Required private login through Render environment variables.
+
+Current MVP boundaries: flashcards use buttons instead of a touch-swipe gesture; progress is session-only;
+friend sharing creates a downloadable HTML quiz rather than a hosted public URL; and low-data mode is
+lightweight in-app output rather than a fully installable offline PWA. The microphone removes the need to
+type, while spoken answer playback (TTS) is planned for a later release.
 
 Exam Saathi now keeps important source diagrams alongside Smart Notes. Gemini
 identifies useful diagram pages, while the app renders the original PDF page so
@@ -27,6 +42,7 @@ evidence-based previous-paper trends.
 
 - `app.py` - Gradio interface and agent orchestration.
 - `core.py` - security, PDF/OCR, NLP, embeddings, search, notes, and questions.
+- `study_features.py` - exam sprint, flashcards, active recall, planner, session progress, diagram challenge and sharing.
 - `reports/` - verified demo outputs and previous-paper trend evidence.
 - `sample_data/` - original demonstration PDFs and camera image.
 - `requirements.txt` - Python dependencies.
@@ -84,6 +100,9 @@ settings before serving real users.
 - Masks email addresses and Indian mobile numbers in agent requests.
 - Blocks common prompt-injection instructions and rate-limits requests.
 - Does not intentionally save uploaded documents to the project repository.
+- Sends recorded microphone audio to Gemini only after the student requests transcription.
+- Friend quiz exports exclude the original PDF and contain generated practice content plus source references.
+- Keeps XP/progress only in the current browser session.
 - Uses Plan B TF-IDF recovery mode if the embedding model cannot load.
 - Includes verified reports for degraded-mode demonstration.
 
@@ -99,5 +118,12 @@ questions.
 
 ## Current status
 
-- Original Colab MVP automated tests: 13 passed, 0 failed.
-- Deployment package: cloud-ready Gradio application with Docker support.
+- Version 2.0 source compiles successfully and the pure study-mode feature tests pass.
+- Deployment package: Render-ready Gradio application with Docker support.
+
+## Render update checklist
+
+Upload or commit all changed files together: `app.py`, `core.py`, `study_features.py`,
+`requirements-render.txt`, `requirements.txt`, `render.yaml`, and `README.md`. Keep these Render
+environment variables configured: `REQUIRE_AUTH=true`, `EXAM_SAATHI_USERNAME`,
+`EXAM_SAATHI_PASSWORD`, and `GEMINI_API_KEY`. Never put their secret values in GitHub.

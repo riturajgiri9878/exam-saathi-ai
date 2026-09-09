@@ -11,6 +11,7 @@ from typing import Any
 import gradio as gr
 from study_export import export_study_guide
 from study_languages import LANGUAGES, translate_analysis
+from learning_modes import profile, register_papers, prioritize_notes, teach_class
 
 from core import (
     SECURITY_GUARD,
@@ -445,6 +446,36 @@ def export_friend_quiz_ui(result: dict[str, Any]):
         return gr.skip(), f"❌ {html.escape(str(error))}"
 
 
+def add_papers_ui(files, catalog, board, level, course, subject, syllabus, year, kind):
+    try:
+        identity = profile(board,level,course,subject,syllabus)
+        if not files: raise ValueError('Choose previous-paper PDFs first.')
+        analysis = analyze_files(files)
+        catalog = register_papers(catalog,analysis,identity,year,kind)
+        warnings = '; '.join(analysis.get('batch_warnings',[]))
+        return catalog, f'Added readable pages. Session catalog: {len(catalog)} pages. '+html.escape(warnings)
+    except Exception as error:
+        return gr.skip(), html.escape(str(error))
+
+
+def paper_priority_ui(analysis,catalog,board,level,course,subject,syllabus,year):
+    try:
+        if not analysis.get('documents'): raise ValueError('Upload your class notes in Secure Upload first.')
+        identity=profile(board,level,course,subject,syllabus)
+        updated,report=prioritize_notes(analysis,catalog,identity,year)
+        return updated,report,notes_markdown(updated),topics_markdown(updated)
+    except Exception as error:
+        return gr.skip(),html.escape(str(error)),gr.skip(),gr.skip()
+
+
+def class_teacher_ui(analysis,question,language,previous,answer):
+    try:
+        response=teach_class(analysis,question,language,previous,answer)
+        return response,response
+    except Exception as error:
+        return html.escape(str(error)),gr.skip()
+
+
 def export_study_guide_ui(result, title, include_diagrams, language):
     try:
         if result.get('study_language') != language:
@@ -772,6 +803,8 @@ html, body {
 
 
 with gr.Blocks(title="Exam Saathi AI") as demo:
+    paper_catalog = gr.State([])
+    teacher_history = gr.State('')
     current_analysis = gr.State({})
     flashcard_state = gr.State({"cards": [], "index": 0})
     quiz_state = gr.State({"items": [], "index": 0, "checked": False})
@@ -784,7 +817,7 @@ with gr.Blocks(title="Exam Saathi AI") as demo:
         <div class="exam-header">
           <h1>📘 EXAM SAATHI AI</h1>
           <h2>Secure Agentic AI Study Assistant</h2>
-          <p><strong>Version 2.4 — Indian Languages</strong></p>
+          <p><strong>Version 2.5 — Class Teacher & Paper Evidence</strong></p>
           <p>PDF/Image → OCR → Human Review → NLP → Embeddings → Smart Notes → Questions → Trends</p>
           {AUTH_CONTROL}
         </div>
@@ -861,6 +894,34 @@ Exam Saathi विद्यार्थियों के study documents क�
             )
             approve_button = gr.Button("✅ Approve Corrected Text")
             approval_status = gr.Markdown()
+
+        with gr.Tab("📖 आज की क्लास समझाओ"):
+            gr.Markdown('Upload today’s notes in Secure Upload first. Story → concept → example → one practice question. Source diagrams stay in Smart Notes. A story is an analogy, not source evidence.')
+            teacher_language = gr.Dropdown(choices=LANGUAGES,value='Hinglish',label='Teaching language')
+            teacher_mic = gr.Audio(sources=['microphone'],type='filepath',label='Speak your doubt')
+            teacher_transcribe = gr.Button('🎙️ Convert Voice to Question')
+            teacher_voice_status = gr.Markdown()
+            teacher_question = gr.Textbox(label='What did you not understand?',lines=3)
+            teacher_start = gr.Button('📖 Explain today’s class',variant='primary')
+            teacher_output = gr.Markdown()
+            teacher_answer = gr.Textbox(label='Your answer to the understanding-check question')
+            teacher_check = gr.Button('Check my answer / give a hint')
+
+        with gr.Tab("📚 Previous Papers"):
+            gr.Markdown('## Match your notes with previous papers\n\nNo national paper collection is preloaded. Add papers with matching metadata, then compare with your Secure Upload notes. This catalog lasts only for this session; files from one upload must share year, subject and syllabus. Class 7 onward only.')
+            paper_board = gr.Textbox(label='Board / University (any Indian board or university)')
+            paper_level = gr.Dropdown(choices=['7','8','9','10','11','12','Graduation'],value='10',label='Class / Level')
+            paper_course = gr.Textbox(label='Stream / Degree / Semester',placeholder='General, Science, Commerce, Arts, BSc semester 2…')
+            paper_subject = gr.Textbox(label='Subject')
+            paper_syllabus = gr.Textbox(label='Syllabus version / course code — match your current syllabus')
+            paper_year = gr.Number(value=2025,precision=0,label='Uploaded papers’ year')
+            paper_kind = gr.Dropdown(choices=['Previous exam paper','Sample / practice paper'],value='Previous exam paper',label='Paper type (verify before selecting)')
+            paper_files = gr.File(file_count='multiple',type='filepath',file_types=['.pdf','.png','.jpg','.jpeg'],label='Choose past papers (up to 10)',elem_classes=['study-file'])
+            paper_add = gr.Button('Add papers to session catalog')
+            paper_status = gr.Markdown()
+            target_exam_year = gr.Number(value=2026,precision=0,label='Target exam year')
+            paper_compare = gr.Button('Prioritize my uploaded notes',variant='primary')
+            paper_report = gr.Markdown()
 
         with gr.Tab("⚡ Exam Mode"):
             gr.Markdown(
@@ -1013,6 +1074,11 @@ Exam Saathi विद्यार्थियों के study documents क�
                 elem_classes=["exam-card"],
             )
 
+    teacher_transcribe.click(fn=transcribe_voice_ui,inputs=[teacher_mic,teacher_language],outputs=[teacher_question,teacher_voice_status])
+    teacher_start.click(fn=lambda a,q,l: class_teacher_ui(a,q,l,'',''),inputs=[current_analysis,teacher_question,teacher_language],outputs=[teacher_output,teacher_history])
+    teacher_check.click(fn=class_teacher_ui,inputs=[current_analysis,teacher_question,teacher_language,teacher_history,teacher_answer],outputs=[teacher_output,teacher_history])
+    paper_add.click(fn=add_papers_ui,inputs=[paper_files,paper_catalog,paper_board,paper_level,paper_course,paper_subject,paper_syllabus,paper_year,paper_kind],outputs=[paper_catalog,paper_status])
+    paper_compare.click(fn=paper_priority_ui,inputs=[current_analysis,paper_catalog,paper_board,paper_level,paper_course,paper_subject,paper_syllabus,target_exam_year],outputs=[current_analysis,paper_report,notes_output,topics_output])
     choose_files.upload(fn=lambda files: files, inputs=[choose_files], outputs=[study_file])
     process_button.click(
         fn=process_file_ui,

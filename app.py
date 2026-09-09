@@ -10,6 +10,7 @@ from typing import Any
 
 import gradio as gr
 from study_export import export_study_guide
+from study_languages import LANGUAGES, translate_analysis
 
 from core import (
     SECURITY_GUARD,
@@ -444,8 +445,10 @@ def export_friend_quiz_ui(result: dict[str, Any]):
         return gr.skip(), f"❌ {html.escape(str(error))}"
 
 
-def export_study_guide_ui(result, title, include_diagrams):
+def export_study_guide_ui(result, title, include_diagrams, language):
     try:
+        if result.get('study_language') != language:
+            result = translate_analysis(result.get('_original_analysis', result), language)
         return export_study_guide(result, title, include_diagrams), "✅ HTML guide ready. Download करके browser में खोलें—images भी file में हैं।"
     except Exception as error:
         return gr.skip(), f"❌ {html.escape(str(error))}"
@@ -476,6 +479,18 @@ def notes_language_ui(result: dict[str, Any], language: str):
         notes_markdown(result)
         + "\n\n> Language conversion अभी उपलब्ध नहीं है; Gemini API configuration check करें।"
     )
+
+
+def translate_study_ui(result, language):
+    try:
+        original = result.get('_original_analysis', result)
+        translated = translate_analysis(original, language)
+        translated['_original_analysis'] = original
+        return (translated, notes_markdown(translated), topics_markdown(translated),
+                questions_markdown(translated), '✅ '+language+' ready. Restart cards/quiz to load the translated questions.')
+    except Exception:
+        return (gr.skip(), gr.skip(), gr.skip(), gr.skip(),
+                'Translation unavailable or incomplete. Original study material is unchanged. Check Gemini access and retry.')
 
 
 def ask_agent_ui(
@@ -769,7 +784,7 @@ with gr.Blocks(title="Exam Saathi AI") as demo:
         <div class="exam-header">
           <h1>📘 EXAM SAATHI AI</h1>
           <h2>Secure Agentic AI Study Assistant</h2>
-          <p><strong>Version 2.3 — Animated Study Space</strong></p>
+          <p><strong>Version 2.4 — Indian Languages</strong></p>
           <p>PDF/Image → OCR → Human Review → NLP → Embeddings → Smart Notes → Questions → Trends</p>
           {AUTH_CONTROL}
         </div>
@@ -890,11 +905,12 @@ Exam Saathi विद्यार्थियों के study documents क�
             notes_output = gr.Markdown(DEMO_NOTES, elem_classes=["exam-card"])
             with gr.Row():
                 notes_language = gr.Dropdown(
-                    choices=["Hinglish", "Simple Hindi", "Exam English"],
-                    value="Exam English",
+                    choices=LANGUAGES,
+                    value="English",
                     label="Notes language",
                 )
                 notes_language_button = gr.Button("🌐 Convert Notes Language")
+            translation_status = gr.Markdown('AI translation: check terminology and equations against the source. Mic/OCR accuracy varies by language.')
             diagram_info = gr.Markdown(
                 "## 📐 Important Diagrams\n\nUpload study material to detect source diagrams.",
                 elem_classes=["exam-card"],
@@ -934,7 +950,7 @@ Exam Saathi विद्यार्थियों के study documents क�
                 elem_classes=["exam-card"],
             )
             answer_language = gr.Dropdown(
-                choices=["Hinglish", "Simple Hindi", "Exam English"],
+                choices=LANGUAGES,
                 value="Hinglish",
                 label="Answer language",
             )
@@ -962,6 +978,7 @@ Exam Saathi विद्यार्थियों के study documents क�
         with gr.Tab("📱 Low Data & Share"):
             gr.Markdown("## 📘 Download Complete HTML Study Guide\n\nNotes, formulas, revision cards, questions और source diagrams एक offline file में। Sharing में source-page images भी दिखेंगी; personal details पहले check करें।")
             guide_title = gr.Textbox(label="Study guide title", value="My Smart Revision Guide")
+            guide_language = gr.Dropdown(choices=LANGUAGES, value="English", label="HTML guide content language")
             guide_images = gr.Checkbox(label="Include original diagram pages (larger download)", value=True)
             guide_button = gr.Button("📘 Create Complete HTML Guide", variant="primary")
             guide_status = gr.Markdown()
@@ -1058,9 +1075,9 @@ Exam Saathi विद्यार्थियों के study documents क�
         outputs=[diagram_challenge],
     )
     notes_language_button.click(
-        fn=notes_language_ui,
+        fn=translate_study_ui,
         inputs=[current_analysis, notes_language],
-        outputs=[notes_output],
+        outputs=[current_analysis, notes_output, topics_output, questions_output, translation_status],
         show_progress="minimal",
     )
     transcribe_button.click(
@@ -1092,7 +1109,7 @@ Exam Saathi विद्यार्थियों के study documents क�
     )
     guide_button.click(
         fn=export_study_guide_ui,
-        inputs=[current_analysis, guide_title, guide_images],
+        inputs=[current_analysis, guide_title, guide_images, guide_language],
         outputs=[guide_file, guide_status],
         show_progress="minimal",
     )

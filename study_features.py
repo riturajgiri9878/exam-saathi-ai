@@ -6,6 +6,7 @@ import html
 import re
 import tempfile
 import uuid
+import unicodedata
 from pathlib import Path
 from typing import Any
 
@@ -92,11 +93,12 @@ def quiz_view(state: dict[str, Any]) -> str:
 
 
 def answer_matches(student_answer: str, expected_answer: str) -> bool:
-    student = set(re.findall(r"[a-zA-Z0-9]+", (student_answer or "").lower()))
-    expected = set(re.findall(r"[a-zA-Z0-9]+", (expected_answer or "").lower()))
-    if not student or not expected:
-        return False
-    return len(student & expected) / min(len(student), len(expected)) >= 0.45
+    # Quiz options need exact matches; partial token overlap incorrectly awards
+    # marks to answers such as 'not Newton'. Keep all Indian-script marks.
+    def normalize(value):
+        return ' '.join(unicodedata.normalize('NFC', value or '').casefold().split()).strip(' .।')
+    student, expected = normalize(student_answer), normalize(expected_answer)
+    return bool(student and expected and student == expected)
 
 
 def progress_markdown(progress: dict[str, Any]) -> str:

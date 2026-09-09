@@ -12,6 +12,7 @@ import gradio as gr
 from study_export import export_study_guide
 from study_languages import LANGUAGES, translate_analysis
 from learning_modes import profile, register_papers, prioritize_notes, teach_class
+from smart_chat import reply as smart_reply
 
 from core import (
     SECURITY_GUARD,
@@ -312,6 +313,31 @@ def process_file_ui(file_paths: Any):
 def process_class_files_ui(files):
     # Reuse the validated OCR pipeline and clear the previous lesson context.
     return (*process_file_ui(files), '', '', '')
+
+
+def process_pasted_ui(text):
+    try:
+        from core import MAX_TEXT_CHARACTERS
+        if len(text or '')>MAX_TEXT_CHARACTERS:
+            raise ValueError('Pasted notes exceed the text limit. Split them into smaller lessons.')
+        result=analyze_approved_text(text,'Pasted_Notes.txt')
+        for document in result['documents']:
+            document['source_type']='Pasted Text'
+            document['extraction_method']='Pasted Text'
+        return ('✅ Pasted notes processed. You can now ask your question.',
+                preview_markdown(result),'Pasted text: no OCR required.',text,
+                topics_markdown(result),notes_markdown(result),diagrams_markdown(result),[],
+                formulas_markdown(result),questions_markdown(result),result,'','','')
+    except Exception as error:
+        return (html.escape(str(error)), *[gr.skip() for _ in range(13)])
+
+
+def smart_chat_ui(question,history,analysis,language,allow_web):
+    try:
+        updated,widgets=smart_reply(question,history,analysis,language,allow_web)
+        return updated,widgets,''
+    except Exception:
+        return gr.skip(),'','Chat/search unavailable or language validation failed. Check Gemini model/access and retry. Your question has been kept.'
 
 
 def approve_corrected_text(edited_text: str, current_state: dict[str, Any]):
@@ -806,7 +832,7 @@ with gr.Blocks(title="Exam Saathi AI") as demo:
         <div class="exam-header">
           <h1>📘 EXAM SAATHI AI</h1>
           <h2>Secure Agentic AI Study Assistant</h2>
-          <p><strong>Version 2.8 — All Supported Languages</strong></p>
+          <p><strong>Version 2.9 — Paste Notes & Smart Chat</strong></p>
           <p>PDF/Image → OCR → Human Review → NLP → Embeddings → Smart Notes → Questions → Trends</p>
           {AUTH_CONTROL}
         </div>
@@ -850,14 +876,17 @@ Exam Saathi विद्यार्थियों के study documents क�
             )
             choose_files = gr.UploadButton(
                 "📂 Choose PDF, HTML or Photos",
-                file_types=[".pdf", ".html", ".htm", ".png", ".jpg", ".jpeg"],
+                file_types=[".pdf", ".html", ".htm", ".txt", ".png", ".jpg", ".jpeg"],
                 file_count="multiple",
                 type="filepath",
                 elem_id="choose-study-files",
             )
+            pasted_notes = gr.Textbox(label='Or paste copied subject notes here',lines=8)
+            paste_process = gr.Button('📝 Process Pasted Notes',variant='primary')
+            paste_status = gr.Markdown()
             study_file = gr.File(
                 label="Upload up to 10 PDFs or Study Images",
-                file_types=[".pdf", ".html", ".htm", ".png", ".jpg", ".jpeg"],
+                file_types=[".pdf", ".html", ".htm", ".txt", ".png", ".jpg", ".jpeg"],
                 type="filepath",
                 file_count="multiple",
                 elem_id="study-upload",
@@ -888,14 +917,16 @@ Exam Saathi विद्यार्थियों के study documents क�
             gr.Markdown('## Understand Today’s Class\n\n**1. Choose your PDF or notebook photos → 2. Process Class Notes → 3. Ask your question.**\n\nAlready processed notes in Secure Upload? You can ask directly below. Both tabs use the latest processed material. Source diagrams are in Smart Notes.')
             class_choose_files = gr.UploadButton(
                 '📂 Choose Class PDF / HTML / Notebook Photos',
-                file_types=['.pdf','.html','.htm','.png','.jpg','.jpeg'],file_count='multiple',
+                file_types=['.pdf','.html','.htm','.txt','.png','.jpg','.jpeg'],file_count='multiple',
                 type='filepath',variant='primary',
             )
             class_files = gr.File(label='Selected class files (up to 10)',
-                file_types=['.pdf','.html','.htm','.png','.jpg','.jpeg'],file_count='multiple',
+                file_types=['.pdf','.html','.htm','.txt','.png','.jpg','.jpeg'],file_count='multiple',
                 type='filepath',elem_classes=['study-file'])
             class_process = gr.Button('🔍 Process Class Notes',variant='primary')
             class_upload_status = gr.Markdown('Choose files above, then press Process Class Notes. Wait for confirmation before asking.')
+            class_paste = gr.Textbox(label='Or paste today’s class notes here',lines=8)
+            class_paste_process = gr.Button('📝 Process Pasted Class Notes',variant='primary')
             gr.Markdown('HTML files are read as text without running scripts or loading external images. HTML source references use document 1, not actual PDF page numbers. For diagrams, also upload a PDF or image.')
             gr.Markdown('### Ask and learn\n\nStory → concept → example → one practice question. Stories are illustrative analogies, not source evidence.')
             teacher_language = gr.Dropdown(choices=LANGUAGES,value='Hinglish',label='Teaching language')
@@ -1031,6 +1062,20 @@ Exam Saathi विद्यार्थियों के study documents क�
             )
             agent_output = gr.Markdown("Agent response will appear here.", elem_classes=["exam-card"])
 
+        with gr.Tab('💬 Smart Study Chat'):
+            gr.Markdown('Ask follow-up questions about your latest processed PDF, HTML, photos or pasted notes. For images, upload/process them in Secure Upload first. Web results are labelled separately from notes.')
+            chat_language=gr.Dropdown(choices=LANGUAGES,value='Hinglish',label='Answer language')
+            chat_web=gr.Checkbox(value=True,label='Search online if notes are insufficient (question sent to Google; API usage applies)')
+            chat_box=gr.Chatbot(label='Study conversation',height=450)
+            chat_suggestions=gr.HTML()
+            chat_error=gr.Markdown()
+            chat_mic=gr.Audio(sources=['microphone'],type='filepath',label='Speak your question')
+            chat_transcribe=gr.Button('Convert voice to question')
+            chat_voice_status=gr.Markdown()
+            chat_question=gr.Textbox(label='Message Exam Saathi',lines=3)
+            chat_send=gr.Button('Send',variant='primary')
+            chat_clear=gr.Button('New conversation')
+
         with gr.Tab("📅 Revision Planner"):
             planner_days = gr.Slider(1, 14, value=5, step=1, label="Days remaining")
             planner_minutes = gr.Slider(15, 180, value=45, step=15, label="Minutes per day")
@@ -1076,6 +1121,15 @@ Exam Saathi विद्यार्थियों के study documents क�
             )
 
     teacher_transcribe.click(fn=transcribe_voice_ui,inputs=[teacher_mic,teacher_language],outputs=[teacher_question,teacher_voice_status])
+    for paste_button,paste_input,paste_result in [(paste_process,pasted_notes,paste_status),(class_paste_process,class_paste,class_upload_status)]:
+        paste_button.click(fn=process_pasted_ui,inputs=[paste_input],outputs=[
+            paste_result,extracted_preview,ocr_status,corrected_text,topics_output,notes_output,
+            diagram_info,diagram_gallery,formulas_output,questions_output,current_analysis,
+            teacher_output,teacher_history,teacher_answer],show_progress='minimal')
+    chat_transcribe.click(fn=transcribe_voice_ui,inputs=[chat_mic,chat_language],outputs=[chat_question,chat_voice_status])
+    for trigger in [chat_send.click,chat_question.submit]:
+        trigger(fn=smart_chat_ui,inputs=[chat_question,chat_box,current_analysis,chat_language,chat_web],outputs=[chat_box,chat_suggestions,chat_error],show_progress='minimal')
+    chat_clear.click(fn=lambda:([], '', ''),outputs=[chat_box,chat_suggestions,chat_error])
     class_choose_files.upload(fn=lambda files: files,inputs=[class_choose_files],outputs=[class_files])
     class_process.click(fn=process_class_files_ui,inputs=[class_files],outputs=[
         class_upload_status,extracted_preview,ocr_status,corrected_text,

@@ -45,7 +45,7 @@ CHUNK_WORD_OVERLAP = 25
 DIAGRAM_RENDER_SCALE = 1.0
 MAX_DIAGRAM_PREVIEWS = 24
 
-ALLOWED_EXTENSIONS = {".pdf", ".png", ".jpg", ".jpeg", ".html", ".htm"}
+ALLOWED_EXTENSIONS = {".pdf", ".png", ".jpg", ".jpeg", ".html", ".htm", ".txt"}
 PROJECT_STOP_WORDS = {
     "exam", "saathi", "class", "notes", "note", "page", "question",
     "questions", "practice", "sample", "diagram", "figure", "chapter",
@@ -97,7 +97,10 @@ def validate_uploaded_file(file_path: str | Path | None) -> dict[str, Any]:
     if size_mb > MAX_FILE_SIZE_MB:
         raise ValueError(f"Maximum allowed file size is {MAX_FILE_SIZE_MB} MB.")
 
-    if extension in {'.html','.htm'}:
+    if extension == '.txt':
+        if not path.read_text(encoding='utf-8-sig').strip():
+            raise ValueError('Text file is empty.')
+    elif extension in {'.html','.htm'}:
         from html_notes import extract_html_notes
         extract_html_notes(path)
     elif extension == ".pdf":
@@ -633,6 +636,10 @@ def extract_uploaded_content(file_path: str | Path) -> tuple[list[dict[str, Any]
     gemini_error: str | None = None
 
     expected_pages = 1
+    if extension == '.txt':
+        text = Path(file_path).read_text(encoding='utf-8-sig')
+        if len(text)>MAX_TEXT_CHARACTERS: raise ValueError('Text file exceeds analysis size limit.')
+        return [{'page_number':1,'text':text,'extraction_method':'Text file (single document)'}],None
     if extension in {'.html','.htm'}:
         from html_notes import extract_html_notes
         text = extract_html_notes(file_path)
@@ -1095,7 +1102,7 @@ def analyze_files(file_paths: list[str | Path] | tuple[str | Path, ...]) -> dict
             file_infos.append(info)
             if confidence:
                 confidence_results.append(confidence)
-            if source_type != 'HTML':
+            if source_type != 'HTML' and info['extension'] != '.txt':
                 diagram_candidates.extend(discover_visual_page_candidates(path, info['file_name'], pages))
             for page in pages:
                 readability = page.get("readability", "UNKNOWN")

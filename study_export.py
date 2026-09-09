@@ -11,6 +11,7 @@ from pathlib import Path
 from PIL import Image, ImageOps
 
 from study_features import build_flashcards, build_quiz_items
+from chapter_teacher import render_lesson, source_signature
 
 
 def esc(value):
@@ -27,6 +28,12 @@ def build_study_html(result, title="My Smart Revision Guide", include_diagrams=T
     sections = []
     def section(key, heading, body):
         sections.append(f'<section id="{key}"><h2>{heading}</h2>{body}</section>')
+
+    lesson=result.get('detailed_lesson')
+    if lesson:
+        if lesson.get('source_signature') != source_signature(result):
+            raise ValueError('This lesson belongs to earlier notes. Rebuild the lesson for the current upload.')
+        section('full-lesson','📖 Detailed Chapter Lesson',render_lesson(lesson))
 
     topics = ''.join(f'<span class="badge">{esc(t["topic"])}</span>' for t in result.get('topics', []))
     section('sprint', '01 · 15-Minute Revision', '<p>5 min: priority topics · 4 min: formulas & diagrams · 6 min: recall practice.</p><p>Revision priorities, not guaranteed exam predictions.</p>'+topics)
@@ -64,9 +71,22 @@ def build_study_html(result, title="My Smart Revision Guide", include_diagrams=T
     section('cards', '05 · Active Recall Cards', cards or '<p>No cards available.</p>')
     quiz = ''.join(f'<article class="card"><h3>Question {i}</h3><p>{esc(q["question"])}</p><details><summary>Check the source answer</summary><p>{esc(q["answer"])}</p><small>{esc(q["source"])}</small></details><label><input type="checkbox"> I need to revise this again</label></article>' for i,q in enumerate(build_quiz_items(result),1))
     section('quiz', '06 · Practice Questions', quiz or '<p>No verified quiz items available.</p>')
+    # Preserve short and long questions even in a quick export without a lesson.
+    for key,label in [('short_questions','Short-answer questions'),('long_questions','Long-answer questions')]:
+        questions=result.get('question_bank',{}).get(key,[])
+        if questions:
+            items=[]
+            for q in questions:
+                if isinstance(q,dict):
+                    item=esc(q.get('question',''))
+                    if q.get('answer'): item+='<p>'+esc(q['answer'])+'</p>'
+                else: item=esc(q)
+                items.append('<li dir="auto">'+item+'</li>')
+            section(key,label,'<p>Practice from the current analysis. Detailed model answers are in the full chapter lesson when generated.</p><ol>'+''.join(items)+'</ol>')
     warnings = result.get('batch_warnings', [])
     section('review', '07 · Coverage & Review', '<p>This is the current extracted analysis, not a guarantee that every PDF page was read. Check unclear handwriting, equations and labels against the original. Formula notation is preserved as source text, not automatically re-typeset.</p>'+''.join(f'<p class="warning">{esc(w)}</p>' for w in warnings))
     nav = ''.join(f'<a href="#{key}">{name}</a>' for key,name in [('sprint','Revision'),('notes','Notes'),('formulas','Formulas'),('diagrams','Diagrams'),('cards','Cards'),('quiz','Quiz'),('review','Review')])
+    if lesson: nav='<a href="#full-lesson">Full chapter lesson</a>'+nav
     section('language', 'Content language', '<p dir="auto">'+esc(result.get('study_language','Original source language'))+'</p><p>AI translation: verify scientific terminology against the original. Source formulas and references are preserved.</p>')
     sections = [s.replace('<p>', '<p dir="auto">').replace('<h3>', '<h3 dir="auto">') for s in sections]
     return '''<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer"><title>'''+esc(title)+'''</title><style>

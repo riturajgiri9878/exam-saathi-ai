@@ -13,6 +13,7 @@ from study_export import export_study_guide
 from study_languages import LANGUAGES, translate_analysis
 from learning_modes import profile, register_papers, prioritize_notes, teach_class
 from smart_chat import reply as smart_reply
+from chapter_teacher import lesson_steps,render_lesson,source_signature,lesson_plain
 
 from core import (
     SECURITY_GUARD,
@@ -507,11 +508,52 @@ def class_teacher_ui(analysis,question,language,previous,answer):
         return html.escape(str(error)),gr.skip()
 
 
-def export_study_guide_ui(result, title, include_diagrams, language):
+def build_chapter_ui(analysis,question,language,previous_lesson):
     try:
+        for lesson in lesson_steps(analysis,language,question,previous_lesson):
+            done=len(lesson['batches']); total=lesson['total_batches']
+            status=f'{done}/{total} source batches explained · {lesson["status"]}. '
+            status+='Every extracted section is listed in Source coverage below.'
+            file=None
+            if lesson['status'] in ('complete','partial') and done:
+                exported=dict(analysis,detailed_lesson=lesson,study_language=language)
+                try:
+                    file=export_study_guide(exported,'Detailed Chapter Study Guide',True)
+                except Exception:
+                    status+=' Lesson is retained, but HTML creation failed. Retry the download in Low Data & Share.'
+            yield (render_lesson(lesson),lesson_plain(lesson),lesson,status,file,diagram_gallery_items(analysis))
+    except Exception:
+        yield (gr.skip(),gr.skip(),gr.skip(),
+               'Could not build this lesson. Process notes first, then retry. Earlier completed sections are retained.',
+               None,gr.skip())
+
+
+def lesson_feedback_ui(analysis,question,language,lesson,answer):
+    if not lesson or lesson.get('source_signature')!=source_signature(analysis):
+        return 'Build the lesson for your current notes before checking your answer.'
+    if not str(answer or '').strip(): return 'Write your answer and mention the topic or question first.'
+    text,_=class_teacher_ui(analysis,question+'\nQuestion/topic and student answer: '+answer[:2000],language,lesson_plain(lesson),answer)
+    return text
+
+
+def reset_lesson_for_source(analysis,lesson):
+    if lesson and lesson.get('source_signature')==source_signature(analysis):
+        return tuple(gr.skip() for _ in range(8))
+    return {},'', '', '',None,[], '', ''
+
+
+def export_study_guide_ui(result, title, include_diagrams, language, lesson):
+    try:
+        if lesson and lesson.get('source_signature')==source_signature(result):
+            if lesson.get('language')!=language:
+                raise ValueError('Select the lesson language here, or rebuild the detailed lesson in your new language first.')
+            if not lesson.get('batches'):
+                raise ValueError('No lesson section is ready yet. Build / Resume the chapter first.')
+            exported=dict(result,detailed_lesson=lesson,study_language=language)
+            return export_study_guide(exported,title,include_diagrams),f'HTML includes the detailed lesson ({lesson["status"]}), diagrams and short/long model answers.'
         if result.get('study_language') != language:
             result = translate_analysis(result.get('_original_analysis', result), language)
-        return export_study_guide(result, title, include_diagrams), "✅ HTML guide ready. Download करके browser में खोलें—images भी file में हैं।"
+        return export_study_guide(result, title, include_diagrams), 'Quick guide ready. For detailed stories, concept diagrams and model answers, build the full chapter in Understand Today’s Class first.'
     except Exception as error:
         return gr.skip(), f"❌ {html.escape(str(error))}"
 
@@ -820,6 +862,7 @@ html, body {
 with gr.Blocks(title="Exam Saathi AI") as demo:
     paper_catalog = gr.State([])
     teacher_history = gr.State('')
+    detailed_lesson = gr.State({})
     current_analysis = gr.State({})
     flashcard_state = gr.State({"cards": [], "index": 0})
     quiz_state = gr.State({"items": [], "index": 0, "checked": False})
@@ -832,7 +875,7 @@ with gr.Blocks(title="Exam Saathi AI") as demo:
         <div class="exam-header">
           <h1>📘 EXAM SAATHI AI</h1>
           <h2>Secure Agentic AI Study Assistant</h2>
-          <p><strong>Version 2.9 — Paste Notes & Smart Chat</strong></p>
+          <p><strong>Version 3.0 — Full Chapter Learning</strong></p>
           <p>PDF/Image → OCR → Human Review → NLP → Embeddings → Smart Notes → Questions → Trends</p>
           {AUTH_CONTROL}
         </div>
@@ -928,16 +971,21 @@ Exam Saathi विद्यार्थियों के study documents क�
             class_paste = gr.Textbox(label='Or paste today’s class notes here',lines=8)
             class_paste_process = gr.Button('📝 Process Pasted Class Notes',variant='primary')
             gr.Markdown('HTML files are read as text without running scripts or loading external images. HTML source references use document 1, not actual PDF page numbers. For diagrams, also upload a PDF or image.')
-            gr.Markdown('### Ask and learn\n\nStory → concept → example → one practice question. Stories are illustrative analogies, not source evidence.')
+            gr.Markdown('### Learn the whole chapter\n\nStories, step-by-step explanations, concept diagrams, examples and short/long practice answers. Stories are illustrative analogies, not source evidence.')
             teacher_language = gr.Dropdown(choices=LANGUAGES,value='Hinglish',label='Teaching language')
             teacher_mic = gr.Audio(sources=['microphone'],type='filepath',label='Speak your doubt')
             teacher_transcribe = gr.Button('🎙️ Convert Voice to Question')
             teacher_voice_status = gr.Markdown()
-            teacher_question = gr.Textbox(label='What did you not understand?',lines=3)
-            teacher_start = gr.Button('📖 Explain today’s class',variant='primary')
-            teacher_output = gr.Markdown()
-            teacher_answer = gr.Textbox(label='Your answer to the understanding-check question')
+            teacher_question = gr.Textbox(label='How should I teach this chapter? (optional)',placeholder='Explain the whole chapter with stories, examples and comparisons. Give extra help with assessment vs evaluation.',lines=3)
+            gr.Markdown('Full Chapter mode reads every extracted source section in order, not only the top search results. Longer chapters take multiple steps. Keep this page open; completed sections appear as they finish. A retry resumes the same notes, language and request.')
+            teacher_start = gr.Button('📖 Build / Resume Full Chapter',variant='primary')
+            teacher_progress = gr.Markdown()
+            teacher_output = gr.HTML()
+            teacher_download = gr.File(label='Download this detailed lesson as HTML',interactive=False,elem_classes=['study-file'])
+            teacher_source_diagrams = gr.Gallery(label='Original source diagrams — click to zoom',columns=2,object_fit='contain')
+            teacher_answer = gr.Textbox(label='Your answer — include the topic and question you are answering')
             teacher_check = gr.Button('Check my answer / give a hint')
+            teacher_feedback = gr.Markdown()
 
         with gr.Tab("📚 Previous Papers"):
             gr.Markdown('## Match your notes with previous papers\n\nNo national paper collection is preloaded. Add papers with matching metadata, then compare with your Secure Upload notes. This catalog lasts only for this session; files from one upload must share year, subject and syllabus. Class 7 onward only.')
@@ -1121,11 +1169,14 @@ Exam Saathi विद्यार्थियों के study documents क�
             )
 
     teacher_transcribe.click(fn=transcribe_voice_ui,inputs=[teacher_mic,teacher_language],outputs=[teacher_question,teacher_voice_status])
+    lesson_reset_outputs=[detailed_lesson,teacher_output,teacher_history,teacher_progress,
+                          teacher_download,teacher_source_diagrams,teacher_feedback,teacher_answer]
     for paste_button,paste_input,paste_result in [(paste_process,pasted_notes,paste_status),(class_paste_process,class_paste,class_upload_status)]:
         paste_button.click(fn=process_pasted_ui,inputs=[paste_input],outputs=[
             paste_result,extracted_preview,ocr_status,corrected_text,topics_output,notes_output,
             diagram_info,diagram_gallery,formulas_output,questions_output,current_analysis,
-            teacher_output,teacher_history,teacher_answer],show_progress='minimal')
+            teacher_output,teacher_history,teacher_answer],show_progress='minimal').then(
+                fn=reset_lesson_for_source,inputs=[current_analysis,detailed_lesson],outputs=lesson_reset_outputs)
     chat_transcribe.click(fn=transcribe_voice_ui,inputs=[chat_mic,chat_language],outputs=[chat_question,chat_voice_status])
     for trigger in [chat_send.click,chat_question.submit]:
         trigger(fn=smart_chat_ui,inputs=[chat_question,chat_box,current_analysis,chat_language,chat_web],outputs=[chat_box,chat_suggestions,chat_error],show_progress='minimal')
@@ -1135,9 +1186,9 @@ Exam Saathi विद्यार्थियों के study documents क�
         class_upload_status,extracted_preview,ocr_status,corrected_text,
         topics_output,notes_output,diagram_info,diagram_gallery,formulas_output,
         questions_output,current_analysis,teacher_output,teacher_history,teacher_answer,
-    ],show_progress='minimal')
-    teacher_start.click(fn=lambda a,q,l: class_teacher_ui(a,q,l,'',''),inputs=[current_analysis,teacher_question,teacher_language],outputs=[teacher_output,teacher_history])
-    teacher_check.click(fn=class_teacher_ui,inputs=[current_analysis,teacher_question,teacher_language,teacher_history,teacher_answer],outputs=[teacher_output,teacher_history])
+    ],show_progress='minimal').then(fn=reset_lesson_for_source,inputs=[current_analysis,detailed_lesson],outputs=lesson_reset_outputs)
+    teacher_start.click(fn=build_chapter_ui,inputs=[current_analysis,teacher_question,teacher_language,detailed_lesson],outputs=[teacher_output,teacher_history,detailed_lesson,teacher_progress,teacher_download,teacher_source_diagrams],show_progress='minimal')
+    teacher_check.click(fn=lesson_feedback_ui,inputs=[current_analysis,teacher_question,teacher_language,detailed_lesson,teacher_answer],outputs=[teacher_feedback])
     paper_add.click(fn=add_papers_ui,inputs=[paper_files,paper_catalog,paper_board,paper_level,paper_course,paper_subject,paper_syllabus,paper_year,paper_kind],outputs=[paper_catalog,paper_status])
     paper_compare.click(fn=paper_priority_ui,inputs=[current_analysis,paper_catalog,paper_board,paper_level,paper_course,paper_subject,paper_syllabus,target_exam_year],outputs=[current_analysis,paper_report,notes_output,topics_output])
     choose_files.upload(fn=lambda files: files, inputs=[choose_files], outputs=[study_file])
@@ -1150,7 +1201,7 @@ Exam Saathi विद्यार्थियों के study documents क�
             formulas_output, questions_output, current_analysis,
         ],
         show_progress="minimal",
-    )
+    ).then(fn=reset_lesson_for_source,inputs=[current_analysis,detailed_lesson],outputs=lesson_reset_outputs)
     approve_button.click(
         fn=approve_corrected_text,
         inputs=[corrected_text, current_analysis],
@@ -1159,7 +1210,7 @@ Exam Saathi विद्यार्थियों के study documents क�
             diagram_gallery, formulas_output, questions_output, current_analysis,
         ],
         show_progress="minimal",
-    )
+    ).then(fn=reset_lesson_for_source,inputs=[current_analysis,detailed_lesson],outputs=lesson_reset_outputs)
     exam_mode_button.click(
         fn=build_exam_mode,
         inputs=[current_analysis, exam_minutes],
@@ -1236,7 +1287,7 @@ Exam Saathi विद्यार्थियों के study documents क�
     )
     guide_button.click(
         fn=export_study_guide_ui,
-        inputs=[current_analysis, guide_title, guide_images, guide_language],
+        inputs=[current_analysis, guide_title, guide_images, guide_language,detailed_lesson],
         outputs=[guide_file, guide_status],
         show_progress="minimal",
     )

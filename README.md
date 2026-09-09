@@ -1,4 +1,9 @@
-# Exam Saathi AI — Version 2.0 Gen-Z Study Coach
+# Exam Saathi AI — Version 3.0 Full Chapter Learning
+
+Start with [V3_0_START_HERE.md](V3_0_START_HERE.md) for the current update,
+deployment steps, detailed HTML download and validation limits. Full Chapter
+mode adds ordered source processing, stories, concept diagrams, short/long model
+answers and resumable batches. Existing features below remain available.
 
 ## Version 2.0 features
 

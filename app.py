@@ -309,6 +309,11 @@ def process_file_ui(file_paths: Any):
         )
 
 
+def process_class_files_ui(files):
+    # Reuse the validated OCR pipeline and clear the previous lesson context.
+    return (*process_file_ui(files), '', '', '')
+
+
 def approve_corrected_text(edited_text: str, current_state: dict[str, Any]):
     try:
         source_name = (
@@ -817,7 +822,7 @@ with gr.Blocks(title="Exam Saathi AI") as demo:
         <div class="exam-header">
           <h1>📘 EXAM SAATHI AI</h1>
           <h2>Secure Agentic AI Study Assistant</h2>
-          <p><strong>Version 2.5 — Class Teacher & Paper Evidence</strong></p>
+          <p><strong>Version 2.6 — Class Upload & Teacher</strong></p>
           <p>PDF/Image → OCR → Human Review → NLP → Embeddings → Smart Notes → Questions → Trends</p>
           {AUTH_CONTROL}
         </div>
@@ -895,8 +900,19 @@ Exam Saathi विद्यार्थियों के study documents क�
             approve_button = gr.Button("✅ Approve Corrected Text")
             approval_status = gr.Markdown()
 
-        with gr.Tab("📖 आज की क्लास समझाओ"):
-            gr.Markdown('Upload today’s notes in Secure Upload first. Story → concept → example → one practice question. Source diagrams stay in Smart Notes. A story is an analogy, not source evidence.')
+        with gr.Tab("📖 Understand Today’s Class"):
+            gr.Markdown('## Understand Today’s Class\n\n**1. Choose your PDF or notebook photos → 2. Process Class Notes → 3. Ask your question.**\n\nAlready processed notes in Secure Upload? You can ask directly below. Both tabs use the latest processed material. Source diagrams are in Smart Notes.')
+            class_choose_files = gr.UploadButton(
+                '📂 Choose Class PDFs / Notebook Photos',
+                file_types=['.pdf','.png','.jpg','.jpeg'],file_count='multiple',
+                type='filepath',variant='primary',
+            )
+            class_files = gr.File(label='Selected class files (up to 10)',
+                file_types=['.pdf','.png','.jpg','.jpeg'],file_count='multiple',
+                type='filepath',elem_classes=['study-file'])
+            class_process = gr.Button('🔍 Process Class Notes',variant='primary')
+            class_upload_status = gr.Markdown('Choose files above, then press Process Class Notes. Wait for confirmation before asking.')
+            gr.Markdown('### Ask and learn\n\nStory → concept → example → one practice question. Stories are illustrative analogies, not source evidence.')
             teacher_language = gr.Dropdown(choices=LANGUAGES,value='Hinglish',label='Teaching language')
             teacher_mic = gr.Audio(sources=['microphone'],type='filepath',label='Speak your doubt')
             teacher_transcribe = gr.Button('🎙️ Convert Voice to Question')
@@ -1075,6 +1091,12 @@ Exam Saathi विद्यार्थियों के study documents क�
             )
 
     teacher_transcribe.click(fn=transcribe_voice_ui,inputs=[teacher_mic,teacher_language],outputs=[teacher_question,teacher_voice_status])
+    class_choose_files.upload(fn=lambda files: files,inputs=[class_choose_files],outputs=[class_files])
+    class_process.click(fn=process_class_files_ui,inputs=[class_files],outputs=[
+        class_upload_status,extracted_preview,ocr_status,corrected_text,
+        topics_output,notes_output,diagram_info,diagram_gallery,formulas_output,
+        questions_output,current_analysis,teacher_output,teacher_history,teacher_answer,
+    ],show_progress='minimal')
     teacher_start.click(fn=lambda a,q,l: class_teacher_ui(a,q,l,'',''),inputs=[current_analysis,teacher_question,teacher_language],outputs=[teacher_output,teacher_history])
     teacher_check.click(fn=class_teacher_ui,inputs=[current_analysis,teacher_question,teacher_language,teacher_history,teacher_answer],outputs=[teacher_output,teacher_history])
     paper_add.click(fn=add_papers_ui,inputs=[paper_files,paper_catalog,paper_board,paper_level,paper_course,paper_subject,paper_syllabus,paper_year,paper_kind],outputs=[paper_catalog,paper_status])

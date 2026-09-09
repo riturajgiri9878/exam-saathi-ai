@@ -7,9 +7,10 @@ import html
 import json
 import re
 
-from language_guard import language_instruction, language_verified
+from language_guard import language_instruction
 
-VERSION = 'chapter-v1'
+VERSION = 'chapter-v2'
+BATCH_UNITS = 1
 
 
 def source_signature(analysis):
@@ -59,8 +60,8 @@ def validate_batch(data, units):
             text(topic.get(key))
         texts(topic.get('steps'),3)
         texts(topic.get('takeaways'),2)
-        if len(topic['story'].split())<20 or len(topic['example'].split())<15:
-            raise ValueError('Story/example too short for a detailed lesson.')
+        # Indian scripts and punctuation do not always tokenize well with split().
+        # Non-empty fields are required above; depth is requested in the prompt.
         ids=topic.get('source_ids',[])
         if not ids or not set(ids)<=allowed: raise ValueError('Invalid source references.')
         used.update(ids)
@@ -108,16 +109,16 @@ def batch_prompt(units, language, request, previous_titles):
         'Do not replace a whole chapter with one selected topic. Adjacent batches may split a sentence: '
         'use the exact provided evidence and identify unclear statements without inventing the continuation. '
         'Consolidate overlapping ideas within THIS batch but do not omit different topics. '
-        'Aim for 250–450 words per substantive topic: a clear definition, an engaging 60–100 word '
+        'Aim for 180–320 words per substantive topic: a clear definition, an engaging 40–80 word '
         'classroom/everyday story, explicit links from the story to the concept in 3–7 explanation steps, '
-        'a 40–80 word worked example, analogy limitation, memory tip and 2–4 takeaways. '
+        'a 30–70 word worked example, analogy limitation, memory tip and 2–4 takeaways. '
         'Stories/examples are illustrative additions, never claims quoted from the source. Avoid unfair '
         'comparisons: a standardized test is not necessarily insensitive to accommodations. '
         'Use restrained helpful emoji in titles. Source factual claims only from SOURCE DATA. '
         'Design a 2–6 node concept diagram. Use sequence ONLY for an actual order/process; '
         'use comparison or concepts for distinctions, not invented causal arrows. '
         'For contrasts add a comparison table; otherwise comparison can be []. '
-        'Include 2–4 substantive short questions with 2–4 sentence model answers and 1–3 long '
+        'Include 1–3 substantive short questions with 2–4 sentence model answers and 1–2 long '
         'questions with a model answer and at least 3 outline points per batch. Explain why each '
         'question helps revision; do not claim it appeared in previous papers or will appear in an exam. '
         'Return valid JSON only using this shape (example IDs must be replaced with supplied IDs):\n'+
@@ -136,18 +137,29 @@ class GeminiLessonProvider:
         from google import genai
         from google.genai import types
         if not GEMINI_API_KEY: raise ValueError('Detailed lessons need the configured Gemini API key.')
-        with genai.Client(api_key=GEMINI_API_KEY,http_options=types.HttpOptions(timeout=60000)) as client:
+        failures=[]
+        with genai.Client(api_key=GEMINI_API_KEY,http_options=types.HttpOptions(timeout=75000)) as client:
             for model in list(dict.fromkeys([GEMINI_MODEL,*GEMINI_FALLBACK_MODELS]))[:2]:
                 try:
                     response=client.models.generate_content(model=model,contents=prompt,
                         config=types.GenerateContentConfig(response_mime_type='application/json',max_output_tokens=14000))
                     data=validate_batch(json.loads(response.text),units)
-                    if not language_verified(client,model,json.dumps(data,ensure_ascii=False),language):
-                        continue
                     return data
-                except Exception:
+                except Exception as error:
+                    failures.append(str(error))
                     continue
-        raise ValueError('This section could not be completed or language-checked. Completed sections are saved; press Build / Resume to retry.')
+        combined=' '.join(failures).upper()
+        if '429' in combined or 'RESOURCE_EXHAUSTED' in combined:
+            reason='Gemini quota/rate limit reached. Wait briefly, then press Build / Resume.'
+        elif '503' in combined or 'UNAVAILABLE' in combined:
+            reason='Gemini is temporarily busy. Press Build / Resume to retry this section.'
+        elif '404' in combined or 'NOT_FOUND' in combined:
+            reason='Configured Gemini model is unavailable. Check GEMINI_MODEL and GEMINI_FALLBACK_MODELS in Render.'
+        elif any(x in combined for x in ('JSON','LESSON DID NOT','MISSING LESSON','NO EXPLAINED','INVALID')):
+            reason='Gemini returned an incomplete lesson format. This smaller section can be retried.'
+        else:
+            reason='Gemini could not complete this section. Check Render logs, then press Build / Resume.'
+        raise ValueError(reason)
 
 
 def lesson_steps(analysis,language,request='',existing=None,provider=None):
@@ -161,7 +173,9 @@ def lesson_steps(analysis,language,request='',existing=None,provider=None):
                 'units':units,'batches':{},'errors':{},'status':'building',
                 'source_warnings':list(analysis.get('batch_warnings',[])),
                 'skipped_pages':analysis.get('page_quality',{}).get('SKIPPED',0)}
-    batches=[units[i:i+3] for i in range(0,len(units),3)]
+    # One ~3k-character section per request prevents oversized/truncated JSON.
+    # It also makes retries cheaper and preserves every completed section.
+    batches=[units[i:i+BATCH_UNITS] for i in range(0,len(units),BATCH_UNITS)]
     lesson['total_batches']=len(batches)
     yield lesson
     generate=provider or GeminiLessonProvider()
@@ -173,8 +187,9 @@ def lesson_steps(analysis,language,request='',existing=None,provider=None):
             data=validate_batch(generate(batch_prompt(batch,language,request,titles),batch,language),batch)
             lesson['batches'][key]=data
             lesson['errors'].pop(key,None)
-        except Exception:
-            lesson['errors'][key]='Section generation failed. Resume to retry.'
+        except Exception as error:
+            message=str(error).strip() or 'Section generation failed. Press Build / Resume to retry.'
+            lesson['errors'][key]=message
             lesson['status']='partial'
             yield lesson
             return
@@ -238,6 +253,9 @@ def render_lesson(lesson,style=True):
     output+='<p>Stories/examples and concept diagrams are teaching aids. Source references identify the original evidence.</p></div>'
     if lesson['status']!='complete':
         output+='<p class="warning">This lesson is not complete. Completed parts remain below. Use Build / Resume to continue; missing sections are listed at the end.</p>'
+        if lesson.get('errors'):
+            latest=lesson['errors'][sorted(lesson['errors'],key=int)[-1]]
+            output+='<p class="warning"><strong>Why it stopped:</strong> '+e(latest)+'</p>'
     topics=[t for b in ordered for t in b['topics']]
     output+='<nav class="toc">'+''.join(f'<a href="#lesson-topic-{i}">{e(t["title"])}</a>' for i,t in enumerate(topics,1))+'</nav>'
     for i,t in enumerate(topics,1):

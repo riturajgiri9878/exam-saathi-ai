@@ -514,6 +514,9 @@ def build_chapter_ui(analysis,question,language,previous_lesson):
             done=len(lesson['batches']); total=lesson['total_batches']
             status=f'{done}/{total} source batches explained · {lesson["status"]}. '
             status+='Every extracted section is listed in Source coverage below.'
+            if lesson.get('errors'):
+                latest=lesson['errors'][sorted(lesson['errors'],key=int)[-1]]
+                status+=' Why it stopped: '+latest
             file=None
             if lesson['status'] in ('complete','partial') and done:
                 exported=dict(analysis,detailed_lesson=lesson,study_language=language)

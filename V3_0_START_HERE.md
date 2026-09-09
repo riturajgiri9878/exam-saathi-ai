@@ -1,5 +1,17 @@
 # Exam Saathi 3.0 — Full Chapter Learning
 
+## Version 3.1 reliability fix
+
+If the page shows `0/4 partial`, install the small Version 3.1 patch. It sends
+one source section per model request, removes the second language-verification
+request that could fail after a successful lesson response, relaxes unreliable
+space-based word counting for Indian scripts, and shows a safe failure reason.
+The same 34,790-character sample becomes 12 smaller resumable requests. More
+progress steps are expected and do not mean content was duplicated.
+
+The Teaching language dropdown controls the generated language. Typing “Hindi
+mein” while the dropdown still says Hinglish does not change it; select Hindi.
+
 This update fixes the short-answer path used by Understand Today's Class and
 adds its detailed lesson to the downloaded HTML. It is a code handoff, not a
 claim that the Render deployment or Gemini account has been tested live.

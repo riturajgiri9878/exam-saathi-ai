@@ -5,6 +5,10 @@ deployment steps, detailed HTML download and validation limits. Full Chapter
 mode adds ordered source processing, stories, concept diagrams, short/long model
 answers and resumable batches. Existing features below remain available.
 
+Version 3.1 reliability patch uses one source section per Gemini request,
+removes the extra language-check API call, and displays a safe reason when a
+batch stops. The Teaching language dropdown remains the output-language control.
+
 ## Version 2.0 features
 
 - 10–60 minute last-minute exam sprint with priority topics, notes, formulas and questions.

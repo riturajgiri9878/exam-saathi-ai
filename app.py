@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 import gradio as gr
+from study_export import export_study_guide
 
 from core import (
     SECURITY_GUARD,
@@ -443,6 +444,13 @@ def export_friend_quiz_ui(result: dict[str, Any]):
         return gr.skip(), f"❌ {html.escape(str(error))}"
 
 
+def export_study_guide_ui(result, title, include_diagrams):
+    try:
+        return export_study_guide(result, title, include_diagrams), "✅ HTML guide ready. Download करके browser में खोलें—images भी file में हैं।"
+    except Exception as error:
+        return gr.skip(), f"❌ {html.escape(str(error))}"
+
+
 def notes_language_ui(result: dict[str, Any], language: str):
     result = result or {}
     if not result.get("notes"):
@@ -851,6 +859,12 @@ Exam Saathi विद्यार्थियों के study documents क�
             planner_output = gr.Markdown("Process study material first.", elem_classes=["exam-card"])
 
         with gr.Tab("📱 Low Data & Share"):
+            gr.Markdown("## 📘 Download Complete HTML Study Guide\n\nNotes, formulas, revision cards, questions और source diagrams एक offline file में। Sharing में source-page images भी दिखेंगी; personal details पहले check करें।")
+            guide_title = gr.Textbox(label="Study guide title", value="My Smart Revision Guide")
+            guide_images = gr.Checkbox(label="Include original diagram pages (larger download)", value=True)
+            guide_button = gr.Button("📘 Create Complete HTML Guide", variant="primary")
+            guide_status = gr.Markdown()
+            guide_file = gr.File(label="Download HTML Study Guide", interactive=False)
             gr.Markdown(
                 "## Lightweight Study Pack\n\nNo diagram loading—only important text, formulas and questions.",
                 elem_classes=["exam-card"],
@@ -973,6 +987,12 @@ Exam Saathi विद्यार्थियों के study documents क�
         fn=export_friend_quiz_ui,
         inputs=[current_analysis],
         outputs=[friend_quiz_file, friend_quiz_status],
+    )
+    guide_button.click(
+        fn=export_study_guide_ui,
+        inputs=[current_analysis, guide_title, guide_images],
+        outputs=[guide_file, guide_status],
+        show_progress="minimal",
     )
     refresh_security.click(fn=security_dashboard, inputs=[], outputs=[security_output])
 

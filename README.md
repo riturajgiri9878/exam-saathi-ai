@@ -9,6 +9,11 @@ Version 3.1 reliability patch uses one source section per Gemini request,
 removes the extra language-check API call, and displays a safe reason when a
 batch stops. The Teaching language dropdown remains the output-language control.
 
+Version 3.2 upgrades Previous Papers with question-level extraction, ten-year
+coverage and missing-year reporting, source-page evidence, distinct-year/topic
+frequency, and a portable catalog that can be saved and restored. See
+[V3_2_PREVIOUS_PAPERS.md](V3_2_PREVIOUS_PAPERS.md).
+
 ## Version 2.0 features
 
 - 10–60 minute last-minute exam sprint with priority topics, notes, formulas and questions.

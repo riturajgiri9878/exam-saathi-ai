@@ -11,7 +11,8 @@ from typing import Any
 import gradio as gr
 from study_export import export_study_guide
 from study_languages import LANGUAGES, translate_analysis
-from learning_modes import profile, register_papers, prioritize_notes, teach_class
+from learning_modes import (profile, register_papers, prioritize_notes, teach_class,
+                            export_catalog, import_catalog, catalog_summary)
 from smart_chat import reply as smart_reply
 from chapter_teacher import lesson_steps,render_lesson,source_signature,lesson_plain
 
@@ -485,9 +486,24 @@ def add_papers_ui(files, catalog, board, level, course, subject, syllabus, year,
         analysis = analyze_files(files)
         catalog = register_papers(catalog,analysis,identity,year,kind)
         warnings = '; '.join(analysis.get('batch_warnings',[]))
-        return catalog, f'Added readable pages. Session catalog: {len(catalog)} pages. '+html.escape(warnings)
+        return catalog, '✅ '+catalog_summary(catalog)+' '+html.escape(warnings)
     except Exception as error:
         return gr.skip(), html.escape(str(error))
+
+
+def export_paper_catalog_ui(catalog):
+    try:
+        return export_catalog(catalog), '✅ Portable catalog ready. Keep this file and import it after a restart or deployment.'
+    except Exception as error:
+        return gr.skip(), '❌ '+html.escape(str(error))
+
+
+def import_paper_catalog_ui(path):
+    try:
+        catalog=import_catalog(path)
+        return catalog, '✅ Catalog restored: '+catalog_summary(catalog)
+    except Exception as error:
+        return gr.skip(), '❌ '+html.escape(str(error))
 
 
 def paper_priority_ui(analysis,catalog,board,level,course,subject,syllabus,year):
@@ -991,7 +1007,7 @@ Exam Saathi विद्यार्थियों के study documents क�
             teacher_feedback = gr.Markdown()
 
         with gr.Tab("📚 Previous Papers"):
-            gr.Markdown('## Match your notes with previous papers\n\nNo national paper collection is preloaded. Add papers with matching metadata, then compare with your Secure Upload notes. This catalog lasts only for this session; files from one upload must share year, subject and syllabus. Class 7 onward only.')
+            gr.Markdown('## Match your notes with previous papers\n\nAdd verified papers with matching metadata, then compare them with your Secure Upload notes. Question-level matches include year, filename and page evidence. Files from one upload must share year, subject and syllabus. Class 7 onward only.')
             paper_board = gr.Textbox(label='Board / University (any Indian board or university)')
             paper_level = gr.Dropdown(choices=['7','8','9','10','11','12','Graduation'],value='10',label='Class / Level')
             paper_course = gr.Textbox(label='Stream / Degree / Semester',placeholder='General, Science, Commerce, Arts, BSc semester 2…')
@@ -999,9 +1015,15 @@ Exam Saathi विद्यार्थियों के study documents क�
             paper_syllabus = gr.Textbox(label='Syllabus version / course code — match your current syllabus')
             paper_year = gr.Number(value=2025,precision=0,label='Uploaded papers’ year')
             paper_kind = gr.Dropdown(choices=['Previous exam paper','Sample / practice paper'],value='Previous exam paper',label='Paper type (verify before selecting)')
-            paper_files = gr.File(file_count='multiple',type='filepath',file_types=['.pdf','.png','.jpg','.jpeg'],label='Choose past papers (up to 10)',elem_classes=['study-file'])
-            paper_add = gr.Button('Add papers to session catalog')
+            paper_files = gr.File(file_count='multiple',type='filepath',file_types=['.pdf','.png','.jpg','.jpeg','.txt','.html','.htm'],label='Choose verified past papers (up to 10)',elem_classes=['study-file'])
+            paper_add = gr.Button('Add and extract questions',variant='primary')
             paper_status = gr.Markdown()
+            with gr.Row():
+                paper_catalog_export = gr.Button('⬇️ Save paper catalog')
+                paper_catalog_import_file = gr.File(label='Restore saved catalog (.json.gz)',file_types=['.gz','.json'],type='filepath',elem_classes=['study-file'])
+                paper_catalog_import = gr.Button('⬆️ Restore catalog')
+            paper_catalog_download = gr.File(label='Download portable paper catalog',interactive=False,elem_classes=['study-file'])
+            paper_catalog_transfer_status = gr.Markdown('Save the catalog after adding papers. Restore it after a Render deployment or browser restart; original paper files should still be archived separately.')
             target_exam_year = gr.Number(value=2026,precision=0,label='Target exam year')
             paper_compare = gr.Button('Prioritize my uploaded notes',variant='primary')
             paper_report = gr.Markdown()
@@ -1193,6 +1215,8 @@ Exam Saathi विद्यार्थियों के study documents क�
     teacher_start.click(fn=build_chapter_ui,inputs=[current_analysis,teacher_question,teacher_language,detailed_lesson],outputs=[teacher_output,teacher_history,detailed_lesson,teacher_progress,teacher_download,teacher_source_diagrams],show_progress='minimal')
     teacher_check.click(fn=lesson_feedback_ui,inputs=[current_analysis,teacher_question,teacher_language,detailed_lesson,teacher_answer],outputs=[teacher_feedback])
     paper_add.click(fn=add_papers_ui,inputs=[paper_files,paper_catalog,paper_board,paper_level,paper_course,paper_subject,paper_syllabus,paper_year,paper_kind],outputs=[paper_catalog,paper_status])
+    paper_catalog_export.click(fn=export_paper_catalog_ui,inputs=[paper_catalog],outputs=[paper_catalog_download,paper_catalog_transfer_status])
+    paper_catalog_import.click(fn=import_paper_catalog_ui,inputs=[paper_catalog_import_file],outputs=[paper_catalog,paper_catalog_transfer_status])
     paper_compare.click(fn=paper_priority_ui,inputs=[current_analysis,paper_catalog,paper_board,paper_level,paper_course,paper_subject,paper_syllabus,target_exam_year],outputs=[current_analysis,paper_report,notes_output,topics_output])
     choose_files.upload(fn=lambda files: files, inputs=[choose_files], outputs=[study_file])
     process_button.click(

@@ -702,7 +702,6 @@ html, body {
 #study-upload, #study-upload :is(div,table,thead,tbody,tr,td,th,a,button,span) {
     background: #e7f5ef !important;
     color: #193d38 !important;
-    opacity: 1 !important;
 }
 .gradio-container .study-file a, #study-upload a {
     text-decoration: underline !important;
@@ -715,6 +714,39 @@ html, body {
     outline: 3px solid #7351b8 !important; outline-offset: 3px;
 }
 .exam-header strong { color: #fff !important; }
+/* File pickers use transparent overlays. Do not paint every nested div:
+   doing so can cover the native upload prompt. */
+#study-upload :is(div,span,button),
+.gradio-container .study-file :is(div,span,button) {
+    background: transparent !important;
+}
+#study-upload :is(p,label,span,button,a),
+.gradio-container .study-file :is(p,label,span,button,a) {
+    color: #193d38 !important;
+}
+.gradio-container input[type="file"] {
+    background: transparent !important;
+    opacity: 0 !important;
+}
+#choose-study-files {
+    background: #5b36b4 !important; color: #fff !important;
+    min-height: 54px; border: 2px solid #452487 !important;
+    font-size: 18px !important; font-weight: 800 !important;
+}
+#choose-study-files :is(span,p,svg) { color: #fff !important; }
+.study-sky { pointer-events: none; position: fixed; inset: 0; z-index: 0; overflow: hidden; }
+.study-sky span { position: absolute; font-size: 36px; opacity: .65;
+    animation: study-drift 9s ease-in-out infinite alternate; }
+.study-sky .rainbow { left: 1%; top: 20%; font-size: 64px; }
+.study-sky .butterfly { right: 2%; top: 42%; animation-delay: -3s; }
+.study-sky .books { left: 2%; bottom: 12%; animation-delay: -6s; }
+.study-sky .star { right: 3%; bottom: 15%; animation-delay: -1s; }
+.exam-header { position: relative; }
+@keyframes study-drift { from { transform: translateY(0) rotate(-5deg); }
+    to { transform: translateY(-18px) rotate(6deg); } }
+@media (prefers-reduced-motion: reduce) { .study-sky span { animation: none; } }
+@media (max-width: 768px) { .study-sky span { font-size: 22px; opacity: .22; }
+    .study-sky .rainbow { font-size: 36px; } }
 @media (max-width: 768px) {
     .gradio-container { padding: 8px !important; }
     .exam-header { padding: 20px 10px !important; }
@@ -732,10 +764,12 @@ with gr.Blocks(title="Exam Saathi AI") as demo:
 
     gr.HTML(
         f"""
+        <div class="study-sky" aria-hidden="true"><span class="rainbow">🌈</span>
+        <span class="butterfly">🦋</span><span class="books">📚</span><span class="star">⭐</span></div>
         <div class="exam-header">
           <h1>📘 EXAM SAATHI AI</h1>
           <h2>Secure Agentic AI Study Assistant</h2>
-          <p><strong>Version 2.2 — Pastel Study Space</strong></p>
+          <p><strong>Version 2.3 — Animated Study Space</strong></p>
           <p>PDF/Image → OCR → Human Review → NLP → Embeddings → Smart Notes → Questions → Trends</p>
           {AUTH_CONTROL}
         </div>
@@ -776,6 +810,13 @@ Exam Saathi विद्यार्थियों के study documents क�
                 "Difficult handwriting automatically uses fast Gemini Vision OCR when configured. "
                 "Large scanned PDFs normally need about 30–150 seconds; requests are now time-limited.",
                 elem_classes=["exam-card"],
+            )
+            choose_files = gr.UploadButton(
+                "📂 फाइल चुनें / Choose PDFs or Photos",
+                file_types=[".pdf", ".png", ".jpg", ".jpeg"],
+                file_count="multiple",
+                type="filepath",
+                elem_id="choose-study-files",
             )
             study_file = gr.File(
                 label="Upload up to 10 PDFs or Study Images",
@@ -955,6 +996,7 @@ Exam Saathi विद्यार्थियों के study documents क�
                 elem_classes=["exam-card"],
             )
 
+    choose_files.upload(fn=lambda files: files, inputs=[choose_files], outputs=[study_file])
     process_button.click(
         fn=process_file_ui,
         inputs=[study_file],

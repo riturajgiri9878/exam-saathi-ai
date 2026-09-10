@@ -1,4 +1,4 @@
-# Exam Saathi AI — Version 3.3 Quick Solver + Full Chapter Learning
+# Exam Saathi AI — Version 3.4 Verified Math + Quick Solver
 
 Start with [V3_0_START_HERE.md](V3_0_START_HERE.md) for the current update,
 deployment steps, detailed HTML download and validation limits. Full Chapter
@@ -19,6 +19,12 @@ Students can type one Mathematics, Physics, Chemistry or general study question,
 press Enter, and receive a step-by-step answer without uploading a document.
 The selected Indian language controls the answer, and follow-up questions retain
 the recent conversation.
+
+Version 3.4 adds independent numeric verification. For calculation questions,
+Gemini must return the interpreted original expression and claimed final value in
+a restricted calculator syntax. The server evaluates both at 50-digit precision.
+A mismatch is rejected and regenerated once; a second mismatch shows an error
+instead of placing an unverified result in the student's chat.
 
 ## Version 2.0 features
 

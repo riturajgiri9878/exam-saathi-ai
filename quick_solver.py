@@ -2,6 +2,9 @@
 from __future__ import annotations
 
 import json
+import ast
+import decimal
+import re
 from language_guard import language_instruction
 
 
@@ -36,8 +39,73 @@ QUESTION:
 """.strip()
 
 
+def needs_numeric_verification(question):
+    text=str(question or '').casefold()
+    signals=('exact value','calculate','evaluate','simplify','sqrt','square root','\\sqrt','\\frac')
+    return any(signal in text for signal in signals) and bool(re.search(r'\d',text))
+
+
+def numeric_solver_prompt(question,history,language,repair=''):
+    return solver_prompt(question,history,language)+f"""
+
+MANDATORY CALCULATOR CONTRACT:
+Use Python code execution to check the arithmetic. Return valid JSON only:
+{{"solution_markdown":"detailed steps but no final-answer line",
+  "verification_expression":"the complete interpreted original numeric expression in Python syntax",
+  "claimed_final_expression":"the exact final value in equivalent Python syntax"}}
+Allowed verification syntax: integers, decimal numbers, +, -, *, /, **, parentheses,
+and sqrt(number). Use ** instead of ^. Do not use floating approximations when an exact
+radical/fraction exists. The application will independently compare both expressions at
+50-digit precision and reject a mismatch.
+{repair}
+""".strip()
+
+
+def _decimal_expression(expression):
+    """Evaluate a small numeric expression without eval or arbitrary code."""
+    expression=str(expression or '').strip().replace('^','**')
+    if len(expression)>1200: raise ValueError('Verification expression is too long.')
+    tree=ast.parse(expression,mode='eval')
+    context=decimal.Context(prec=60)
+    def visit(node):
+        if isinstance(node,ast.Expression): return visit(node.body)
+        if isinstance(node,ast.Constant) and isinstance(node.value,(int,float)) and not isinstance(node.value,bool):
+            return context.create_decimal(str(node.value))
+        if isinstance(node,ast.UnaryOp) and isinstance(node.op,(ast.UAdd,ast.USub)):
+            value=visit(node.operand);return value if isinstance(node.op,ast.UAdd) else -value
+        if isinstance(node,ast.BinOp):
+            left,right=visit(node.left),visit(node.right)
+            if isinstance(node.op,ast.Add): return context.add(left,right)
+            if isinstance(node.op,ast.Sub): return context.subtract(left,right)
+            if isinstance(node.op,ast.Mult): return context.multiply(left,right)
+            if isinstance(node.op,ast.Div): return context.divide(left,right)
+            if isinstance(node.op,ast.Pow):
+                if right!=right.to_integral_value() or abs(right)>1000: raise ValueError('Unsupported exponent.')
+                return context.power(left,int(right))
+        if (isinstance(node,ast.Call) and isinstance(node.func,ast.Name)
+                and node.func.id=='sqrt' and len(node.args)==1 and not node.keywords):
+            value=visit(node.args[0])
+            if value<0: raise ValueError('Complex values are not supported by this verifier.')
+            return context.sqrt(value)
+        raise ValueError('Unsupported calculator syntax.')
+    return +visit(tree)
+
+
+def verify_numeric_payload(payload):
+    if not isinstance(payload,dict): raise ValueError('Math response is not structured.')
+    solution=str(payload.get('solution_markdown','')).strip()
+    original=str(payload.get('verification_expression','')).strip()
+    claimed=str(payload.get('claimed_final_expression','')).strip()
+    if not solution or not original or not claimed: raise ValueError('Math verification fields are missing.')
+    left,right=_decimal_expression(original),_decimal_expression(claimed)
+    scale=max(abs(left),abs(right),decimal.Decimal(1))
+    if abs(left-right)>scale*decimal.Decimal('1e-45'):
+        raise ValueError(f'Calculator mismatch: original evaluates to {left}; claimed final evaluates to {right}.')
+    return solution,claimed
+
+
 class GeminiQuickSolver:
-    def __call__(self,prompt):
+    def __call__(self,prompt,structured=False):
         from core import (GEMINI_API_KEY,GEMINI_MODEL,GEMINI_FALLBACK_MODELS,
                           GEMINI_REQUEST_TIMEOUT_MS)
         if not GEMINI_API_KEY:
@@ -56,8 +124,13 @@ class GeminiQuickSolver:
                 if model and model not in models: models.append(model)
             for model in models[:2]:
                 try:
-                    response=client.models.generate_content(model=model,contents=prompt,
-                        config=types.GenerateContentConfig(max_output_tokens=3500))
+                    if structured:
+                        config=types.GenerateContentConfig(max_output_tokens=3500,
+                            response_mime_type='application/json',
+                            tools=[types.Tool(code_execution=types.ToolCodeExecution())])
+                    else:
+                        config=types.GenerateContentConfig(max_output_tokens=3500)
+                    response=client.models.generate_content(model=model,contents=prompt,config=config)
                     answer=str(getattr(response,'text','') or '').strip()
                     if answer: return answer
                 except Exception as error:
@@ -78,7 +151,22 @@ def solve_question(question,history,language,provider=None):
     if len(question)>4000:
         raise ValueError('Keep one question below 4,000 characters. Use Secure Upload for long notes.')
     history=list(history or [])[-12:]
-    answer=(provider or GeminiQuickSolver())(solver_prompt(question,history,language))
+    generate=provider or GeminiQuickSolver()
+    if needs_numeric_verification(question):
+        repair=''
+        for attempt in range(2):
+            raw=generate(numeric_solver_prompt(question,history,language,repair),True)
+            try:
+                payload=json.loads(raw) if isinstance(raw,str) else raw
+                solution,claimed=verify_numeric_payload(payload)
+                answer=solution+'\n\n### ✅ Calculator-verified final answer\n\n`'+claimed+'`'
+                break
+            except (ValueError,json.JSONDecodeError) as error:
+                repair='Previous answer failed independent verification: '+str(error)[:600]+' Recalculate every numeric term with Python.'
+        else:
+            raise ValueError('The generated math answer failed independent calculation twice. Please retry; no unverified answer was shown.')
+    else:
+        answer=generate(solver_prompt(question,history,language),False)
     history.extend([{'role':'user','content':question},
                     {'role':'assistant','content':answer}])
     return history[-14:]

@@ -902,7 +902,7 @@ with gr.Blocks(title="Exam Saathi AI") as demo:
         <div class="exam-header">
           <h1>📘 EXAM SAATHI AI</h1>
           <h2>Secure Agentic AI Study Assistant</h2>
-          <p><strong>Version 3.3 — Quick Solver + Full Chapter Learning</strong></p>
+          <p><strong>Version 3.4 — Verified Math + Quick Solver</strong></p>
           <p>PDF/Image → OCR → Human Review → NLP → Embeddings → Smart Notes → Questions → Trends</p>
           {AUTH_CONTROL}
         </div>
@@ -938,7 +938,7 @@ Exam Saathi विद्यार्थियों के study documents क�
 
         with gr.Tab("📤 Secure Upload"):
             gr.Markdown(
-                "## ⚡ Quick Question Solver\n\nएक सवाल solve करना है? नीचे लिखकर **Enter** दबाएँ—PDF upload जरूरी नहीं है। Math, Physics, Chemistry और दूसरे subjects के लिए step-by-step answer मिलेगा।",
+                "## ⚡ Quick Question Solver\n\nएक सवाल solve करना है? नीचे लिखकर **Enter** दबाएँ—PDF upload जरूरी नहीं है। Math, Physics, Chemistry और दूसरे subjects के लिए step-by-step answer मिलेगा। Numeric math में final expression independent calculator से verify होगा; mismatch होने पर गलत answer नहीं दिखेगा।",
                 elem_classes=["exam-card"],
             )
             quick_language = gr.Dropdown(

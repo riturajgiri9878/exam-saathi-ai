@@ -14,6 +14,7 @@ from study_languages import LANGUAGES, translate_analysis
 from learning_modes import (profile, register_papers, prioritize_notes, teach_class,
                             export_catalog, import_catalog, catalog_summary)
 from smart_chat import reply as smart_reply
+from quick_solver import solve_question
 from chapter_teacher import lesson_steps,render_lesson,source_signature,lesson_plain
 
 from core import (
@@ -340,6 +341,13 @@ def smart_chat_ui(question,history,analysis,language,allow_web):
         return updated,widgets,''
     except Exception:
         return gr.skip(),'','Chat/search unavailable or language validation failed. Check Gemini model/access and retry. Your question has been kept.'
+
+
+def quick_solver_ui(question,history,language):
+    try:
+        return solve_question(question,history,language), '', ''
+    except Exception as error:
+        return gr.skip(), gr.skip(), '❌ '+html.escape(str(error))
 
 
 def approve_corrected_text(edited_text: str, current_state: dict[str, Any]):
@@ -894,7 +902,7 @@ with gr.Blocks(title="Exam Saathi AI") as demo:
         <div class="exam-header">
           <h1>📘 EXAM SAATHI AI</h1>
           <h2>Secure Agentic AI Study Assistant</h2>
-          <p><strong>Version 3.0 — Full Chapter Learning</strong></p>
+          <p><strong>Version 3.3 — Quick Solver + Full Chapter Learning</strong></p>
           <p>PDF/Image → OCR → Human Review → NLP → Embeddings → Smart Notes → Questions → Trends</p>
           {AUTH_CONTROL}
         </div>
@@ -930,7 +938,25 @@ Exam Saathi विद्यार्थियों के study documents क�
 
         with gr.Tab("📤 Secure Upload"):
             gr.Markdown(
-            "## Upload Study Material\n\nSelect up to 10 PDFs or camera images together. "
+                "## ⚡ Quick Question Solver\n\nएक सवाल solve करना है? नीचे लिखकर **Enter** दबाएँ—PDF upload जरूरी नहीं है। Math, Physics, Chemistry और दूसरे subjects के लिए step-by-step answer मिलेगा।",
+                elem_classes=["exam-card"],
+            )
+            quick_language = gr.Dropdown(
+                choices=LANGUAGES,value="Hinglish",label="Answer language",
+            )
+            quick_chat = gr.Chatbot(label="Your solved questions",height=420)
+            quick_question = gr.Textbox(
+                label="Type one question",
+                placeholder=r"Example: Find the exact value of (sqrt(18)/(sqrt(12)-sqrt(6)))^10",
+                lines=3,
+            )
+            with gr.Row():
+                quick_send = gr.Button("➤ Solve step by step",variant="primary")
+                quick_clear = gr.Button("New question")
+            quick_error = gr.Markdown()
+            gr.Markdown("---\n## 📚 Upload Study Material",elem_classes=["exam-card"])
+            gr.Markdown(
+            "Select up to 10 PDFs or camera images together. "
                 "Maximum 10 MB per file, 40 MB combined and 50 pages per PDF. "
                 "Difficult handwriting automatically uses fast Gemini Vision OCR when configured. "
                 "Large scanned PDFs normally need about 30–150 seconds; requests are now time-limited.",
@@ -1203,6 +1229,9 @@ Exam Saathi विद्यार्थियों के study documents क�
             teacher_output,teacher_history,teacher_answer],show_progress='minimal').then(
                 fn=reset_lesson_for_source,inputs=[current_analysis,detailed_lesson],outputs=lesson_reset_outputs)
     chat_transcribe.click(fn=transcribe_voice_ui,inputs=[chat_mic,chat_language],outputs=[chat_question,chat_voice_status])
+    quick_send.click(fn=quick_solver_ui,inputs=[quick_question,quick_chat,quick_language],outputs=[quick_chat,quick_question,quick_error],show_progress='minimal')
+    quick_question.submit(fn=quick_solver_ui,inputs=[quick_question,quick_chat,quick_language],outputs=[quick_chat,quick_question,quick_error],show_progress='minimal')
+    quick_clear.click(fn=lambda:([], '', ''),outputs=[quick_chat,quick_question,quick_error])
     for trigger in [chat_send.click,chat_question.submit]:
         trigger(fn=smart_chat_ui,inputs=[chat_question,chat_box,current_analysis,chat_language,chat_web],outputs=[chat_box,chat_suggestions,chat_error],show_progress='minimal')
     chat_clear.click(fn=lambda:([], '', ''),outputs=[chat_box,chat_suggestions,chat_error])

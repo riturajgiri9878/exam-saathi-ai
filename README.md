@@ -1,4 +1,4 @@
-# Exam Saathi AI — Version 3.0 Full Chapter Learning
+# Exam Saathi AI — Version 3.3 Quick Solver + Full Chapter Learning
 
 Start with [V3_0_START_HERE.md](V3_0_START_HERE.md) for the current update,
 deployment steps, detailed HTML download and validation limits. Full Chapter
@@ -13,6 +13,12 @@ Version 3.2 upgrades Previous Papers with question-level extraction, ten-year
 coverage and missing-year reporting, source-page evidence, distinct-year/topic
 frequency, and a portable catalog that can be saved and restored. See
 [V3_2_PREVIOUS_PAPERS.md](V3_2_PREVIOUS_PAPERS.md).
+
+Version 3.3 adds a prominent Quick Question Solver at the top of Secure Upload.
+Students can type one Mathematics, Physics, Chemistry or general study question,
+press Enter, and receive a step-by-step answer without uploading a document.
+The selected Indian language controls the answer, and follow-up questions retain
+the recent conversation.
 
 ## Version 2.0 features
 

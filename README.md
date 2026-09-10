@@ -1,4 +1,4 @@
-# Exam Saathi AI — Version 3.5 Hard-Question Consistency Audit
+# Exam Saathi AI — Version 3.6 Independent Science Examiner
 
 Start with [V3_0_START_HERE.md](V3_0_START_HERE.md) for the current update,
 deployment steps, detailed HTML download and validation limits. Full Chapter
@@ -32,6 +32,12 @@ solver first audits stoichiometry, conservation laws, units, assumptions, data
 consistency and whether the requested unknowns are uniquely determined. It can use
 Gemini code execution when available, retries without the tool for compatibility, and
 must identify an impossible or underdetermined problem instead of inventing a number.
+
+Version 3.6 adds a separate second-pass science examiner for complex Chemistry and
+Physics prompts. It independently checks carbon/functional-group continuity, named
+tests, reagents, stoichiometry, conservation laws, dimensions and units. The reviewed
+answer replaces the first draft, and an incomplete review is blocked. Quick Solver chat
+bubbles are also forced to a readable light palette in browser dark mode.
 
 ## Version 2.0 features
 

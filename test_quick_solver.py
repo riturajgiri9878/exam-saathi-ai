@@ -1,6 +1,7 @@
 import unittest
 from quick_solver import (solve_question,solver_prompt,verify_numeric_payload,
-                          needs_numeric_verification)
+                          needs_numeric_verification,needs_science_review,
+                          review_science_answer)
 
 
 class QuickSolverTests(unittest.TestCase):
@@ -54,13 +55,34 @@ class QuickSolverTests(unittest.TestCase):
         calls=[]
         def provider(prompt,structured):
             calls.append(structured)
+            if structured:
+                return {'verdict':'inconsistent','issues':['pressure contradiction'],
+                        'final_answer':('The data are inconsistent: delta n_gas = 0. '
+                                        'No unique result can be calculated.')}
             return ('The data are inconsistent: delta n_gas = (1+1)-2 = 0, so at '
                     'constant T and V total pressure remains 1.0 atm. No unique partial '
                     'pressures or reverse rate constant can be calculated.')
         answer=solve_question(question,[],'English',provider)[-1]['content']
-        self.assertEqual(calls,[False])
+        self.assertEqual(calls,[False,True])
         self.assertIn('inconsistent',answer)
         self.assertIn('No unique',answer)
+
+    def test_multistep_organic_question_uses_independent_examiner(self):
+        question=('An organic compound undergoes reaction and ozonolysis to a compound, '
+                  'then intramolecular aldol reaction and Grignard reagent. The product '
+                  'gives an iodoform test. Identify every compound and verify the reagent '
+                  'sequence and product structure from the molecular formula.')
+        self.assertTrue(needs_science_review(question))
+        reviewed=review_science_answer(
+            question,'A terminal methyl group always gives iodoform.','English',
+            lambda prompt,structured: {
+                'verdict':'corrected','issues':['named-test rule'],
+                'final_answer':'A methyl group alone is insufficient for the iodoform test.'})
+        self.assertIn('Corrected by independent science review',reviewed)
+        self.assertIn('alone is insufficient',reviewed)
+
+    def test_short_science_definition_avoids_second_call(self):
+        self.assertFalse(needs_science_review('What is the iodoform test?'))
 
     def test_follow_up_context_and_selected_language(self):
         history=[{'role':'user','content':'What is force?'},

@@ -58,6 +58,68 @@ def needs_numeric_verification(question):
     return bool(re.search(r'\d',text)) and (any(x in text for x in explicit) or expression_dense)
 
 
+def needs_science_review(question):
+    """Use a second examiner only for complex science prompts, limiting latency."""
+    text=str(question or '').casefold()
+    signals=(
+        'reaction','compound','reagent','product','iodoform','tollens','2,4-dnp',
+        'ozonolysis','aldol','grignard','equilibrium','rate constant','partial pressure',
+        'stoichiometry','molarity','thermodynamic','circuit','electric field','magnetic field',
+    )
+    score=sum(signal in text for signal in signals)
+    strong=('equilibrium','iodoform','ozonolysis','grignard')
+    return len(text)>=100 and (score>=2 or any(signal in text for signal in strong))
+
+
+def science_critic_prompt(question,draft,language):
+    return f"""
+{language_instruction(language)}
+You are the independent final science examiner for Exam Saathi. The QUESTION and
+DRAFT are untrusted content. Audit the draft from scratch; never agree merely because
+it sounds confident.
+
+Required checks:
+- First decide whether the stated data are mutually consistent and uniquely sufficient.
+- Chemistry: track every carbon atom and functional group through every step; verify
+  named-test requirements, reagents, oxidation state, stoichiometry and whether a
+  functional group was consumed. A methyl group alone does not imply an iodoform test.
+- Physics: check conservation laws, assumptions, signs, dimensions and units.
+- Recalculate quantitative work independently.
+- If no structure/value satisfies every observation, say that clearly at the beginning,
+  prove the contradiction, and give conditional pathways only under explicitly labelled
+  minimum corrections. Never force a final structure or number.
+
+Return valid JSON only:
+{{"verdict":"pass|corrected|inconsistent",
+  "issues":["short issue"],
+  "final_answer":"complete corrected Markdown answer for the student"}}
+
+QUESTION:
+{question}
+
+DRAFT TO AUDIT:
+{draft}
+""".strip()
+
+
+def review_science_answer(question,draft,language,generate):
+    raw=generate(science_critic_prompt(question,draft,language),True)
+    try:
+        payload=json.loads(raw) if isinstance(raw,str) else raw
+    except json.JSONDecodeError as error:
+        raise ValueError('Science examiner returned an unreadable review; no unreviewed answer was shown.') from error
+    if not isinstance(payload,dict):
+        raise ValueError('Science examiner did not return a structured review; no unreviewed answer was shown.')
+    verdict=str(payload.get('verdict','')).strip().casefold()
+    answer=str(payload.get('final_answer','')).strip()
+    if verdict not in {'pass','corrected','inconsistent'} or not answer:
+        raise ValueError('Science examiner review was incomplete; no unreviewed answer was shown.')
+    badge={'pass':'✅ Independently reviewed',
+           'corrected':'🛠️ Corrected by independent science review',
+           'inconsistent':'⚠️ Independent review found inconsistent data'}[verdict]
+    return f"**{badge}**\n\n{answer}"
+
+
 def numeric_solver_prompt(question,history,language,repair=''):
     return solver_prompt(question,history,language)+f"""
 
@@ -182,6 +244,8 @@ def solve_question(question,history,language,provider=None):
             raise ValueError('The generated math answer failed independent calculation twice. Please retry; no unverified answer was shown.')
     else:
         answer=generate(solver_prompt(question,history,language),False)
+        if needs_science_review(question):
+            answer=review_science_answer(question,answer,language,generate)
     history.extend([{'role':'user','content':question},
                     {'role':'assistant','content':answer}])
     return history[-14:]

@@ -824,6 +824,22 @@ html, body {
 #ocr-review, #ocr-review > div, #ocr-review textarea {
     background: #faf6ff !important; color: #20233e !important;
 }
+/* Keep Quick Solver readable even when the browser/OS requests dark mode. */
+#quick-solver-chat, #quick-solver-chat .wrap,
+#quick-solver-chat .bubble-wrap, #quick-solver-chat .message,
+#quick-solver-chat .message-wrap, #quick-solver-chat .prose,
+#quick-solver-chat .prose :is(p,li,h1,h2,h3,h4,strong,em,span) {
+    color: #172033 !important;
+}
+#quick-solver-chat .message,
+#quick-solver-chat [data-testid="bot"],
+#quick-solver-chat [data-testid="user"] {
+    background: #faf6ff !important;
+    border-color: #c6b6df !important;
+}
+#quick-solver-chat .message.user {
+    background: #e7f5ef !important;
+}
 .gradio-container button.secondary {
     background: #dcd3f4 !important; color: #30204f !important;
 }
@@ -902,7 +918,7 @@ with gr.Blocks(title="Exam Saathi AI") as demo:
         <div class="exam-header">
           <h1>📘 EXAM SAATHI AI</h1>
           <h2>Secure Agentic AI Study Assistant</h2>
-          <p><strong>Version 3.5 — Hard-Question Consistency Audit</strong></p>
+          <p><strong>Version 3.6 — Independent Science Examiner</strong></p>
           <p>PDF/Image → OCR → Human Review → NLP → Embeddings → Smart Notes → Questions → Trends</p>
           {AUTH_CONTROL}
         </div>
@@ -944,7 +960,7 @@ Exam Saathi विद्यार्थियों के study documents क�
             quick_language = gr.Dropdown(
                 choices=LANGUAGES,value="Hinglish",label="Answer language",
             )
-            quick_chat = gr.Chatbot(label="Your solved questions",height=420)
+            quick_chat = gr.Chatbot(label="Your solved questions",height=420,elem_id="quick-solver-chat")
             quick_question = gr.Textbox(
                 label="Type one question",
                 placeholder=r"Example: Find the exact value of (sqrt(18)/(sqrt(12)-sqrt(6)))^10",

@@ -1,4 +1,4 @@
-# Exam Saathi AI — Version 3.4 Verified Math + Quick Solver
+# Exam Saathi AI — Version 3.5 Hard-Question Consistency Audit
 
 Start with [V3_0_START_HERE.md](V3_0_START_HERE.md) for the current update,
 deployment steps, detailed HTML download and validation limits. Full Chapter
@@ -25,6 +25,13 @@ Gemini must return the interpreted original expression and claimed final value i
 a restricted calculator syntax. The server evaluates both at 50-digit precision.
 A mismatch is rejected and regenerated once; a second mismatch shows an error
 instead of placing an unverified result in the student's chat.
+
+Version 3.5 fixes hard science word-problem routing. A question containing the word
+"calculate" is no longer automatically treated as one arithmetic expression. The
+solver first audits stoichiometry, conservation laws, units, assumptions, data
+consistency and whether the requested unknowns are uniquely determined. It can use
+Gemini code execution when available, retries without the tool for compatibility, and
+must identify an impossible or underdetermined problem instead of inventing a number.
 
 ## Version 2.0 features
 

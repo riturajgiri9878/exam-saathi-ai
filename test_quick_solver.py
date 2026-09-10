@@ -43,6 +43,24 @@ class QuickSolverTests(unittest.TestCase):
     def test_numeric_detection(self):
         self.assertTrue(needs_numeric_verification('calculate sqrt(18) exactly'))
         self.assertFalse(needs_numeric_verification('Explain photosynthesis'))
+        chemistry=('A reversible gaseous reaction 2A(g) <=> B(g)+C(g) is in a closed '
+                   'vessel. At constant temperature total pressure changes from 1.0 to '
+                   '1.2 atm. Calculate equilibrium pressure and reverse rate constant.')
+        self.assertFalse(needs_numeric_verification(chemistry))
+
+    def test_inconsistent_science_problem_can_return_diagnostic_answer(self):
+        question=('For 2A(g) <=> B(g)+C(g), a rigid closed vessel starts at 1.0 atm '
+                  'and allegedly reaches 1.2 atm at constant temperature. Calculate equilibrium.')
+        calls=[]
+        def provider(prompt,structured):
+            calls.append(structured)
+            return ('The data are inconsistent: delta n_gas = (1+1)-2 = 0, so at '
+                    'constant T and V total pressure remains 1.0 atm. No unique partial '
+                    'pressures or reverse rate constant can be calculated.')
+        answer=solve_question(question,[],'English',provider)[-1]['content']
+        self.assertEqual(calls,[False])
+        self.assertIn('inconsistent',answer)
+        self.assertIn('No unique',answer)
 
     def test_follow_up_context_and_selected_language(self):
         history=[{'role':'user','content':'What is force?'},

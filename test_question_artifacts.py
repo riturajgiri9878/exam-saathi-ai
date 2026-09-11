@@ -6,7 +6,7 @@ from pathlib import Path
 from question_artifacts import (build_diagram_svg,build_question_html,
                                 detect_subject,diagram_kind,
                                 export_question_artifacts,
-                                markdown_to_safe_html)
+                                markdown_to_safe_html,question_text_only)
 
 
 class QuestionArtifactTests(unittest.TestCase):
@@ -16,6 +16,24 @@ class QuestionArtifactTests(unittest.TestCase):
         self.assertEqual(diagram_kind('Explain a volcano','Geography'),'volcano')
         self.assertEqual(diagram_kind('Charged ring electric field on its axis','Physics'),'charged_ring')
         self.assertEqual(diagram_kind('Draw and explain an animal cell','Biology'),'cell')
+        self.assertEqual(detect_subject('Which country is doubly landlocked?'),'Geography')
+        self.assertEqual(diagram_kind('Which country is doubly landlocked?','Geography'),'doubly_landlocked')
+
+    def test_landlocked_diagram_and_answer_hiding(self):
+        supplied=('Which country is doubly landlocked besides Liechtenstein? '
+                  'Answer: Uzbekistan')
+        self.assertEqual(question_text_only(supplied),
+                         'Which country is doubly landlocked besides Liechtenstein?')
+        svg=build_diagram_svg(question_text_only(supplied),'Geography',True)
+        ET.fromstring(svg)
+        for label in ('UZBEKISTAN','Kazakhstan','Kyrgyzstan','Tajikistan',
+                      'Afghanistan','Turkmenistan'):
+            self.assertIn(label,svg)
+        document=build_question_html(supplied,'Uzbekistan is correct.','English','Geography')
+        question_section=document.split('</section>',1)[0]
+        self.assertNotIn('Answer: Uzbekistan',question_section)
+        self.assertIn('World Bank - Uzbekistan country overview',document)
+        self.assertIn('Source-supported explanation',document)
 
     def test_every_svg_is_valid_and_animation_is_optional(self):
         cases=[('volcano','Geography'),('Atacama climate and rainfall','Geography'),
@@ -55,6 +73,7 @@ class QuestionArtifactTests(unittest.TestCase):
         self.assertTrue(Path(html_file).is_file())
         self.assertTrue(Path(pdf_file).read_bytes().startswith(b'%PDF'))
         self.assertIn('@keyframes',Path(html_file).read_text(encoding='utf-8'))
+        self.assertLess(Path(pdf_file).stat().st_size,2_000_000)
 
 
 if __name__=='__main__':

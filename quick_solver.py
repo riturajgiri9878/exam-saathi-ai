@@ -35,7 +35,10 @@ Solve the student's exact question. Detect the subject yourself.
   distinguish a teaching simplification from a real exception; define technical terms.
 - Geography/Earth science: separate oceanic, atmospheric, geological and human drivers;
   state the spatial/seasonal scope; replace words like permanent, impossible, all and
-  only with precise evidence-based qualifiers unless they are literally true.
+  only with precise evidence-based qualifiers unless they are literally true. For
+  political geography, distinguish an open-ocean coast from an inland/endorheic sea,
+  verify every named neighbour, and use a spatial analogy that does not reverse land
+  and water. Route examples must be geographically valid and clearly labelled.
 - History/civics/economics: separate verified fact, cause, consequence, interpretation
   and uncertainty; include dates only when confident and never invent a citation.
 - Language/literature: explain meaning, context, structure and one worked example while
@@ -52,7 +55,8 @@ DEPTH (mandatory): Build one coherent answer usable from beginner to exam level:
 Do not pad the answer or repeat the same idea.
 
 Use Markdown. Prefer complete useful steps over a short unsupported answer. Use small,
-helpful emoji only in headings. If the question is ambiguous, explain the possible
+helpful emoji only in headings. If the student supplied a proposed answer, verify it
+independently instead of treating it as evidence. If the question is ambiguous, explain the possible
 interpretations and ask one precise follow-up. Never claim web research or uploaded-note
 evidence. Before returning, perform a second independent pass over conservation laws,
 units, algebra and arithmetic and silently correct any conflict you find. End with a
@@ -93,14 +97,17 @@ def needs_science_review(question):
         'reaction','compound','reagent','product','iodoform','tollens','2,4-dnp',
         'ozonolysis','aldol','grignard','equilibrium','rate constant','partial pressure',
         'stoichiometry','molarity','thermodynamic','circuit','electric field','magnetic field',
-        'climate','desert','monsoon','volcano','earthquake','photosynthesis','respiration',
+        'climate','desert','monsoon','volcano','earthquake','landlocked','country border',
+        'photosynthesis','respiration',
         'dna','genetics','cell division','blood circulation','ecosystem',
         'constitution','parliament','democracy','economics','inflation','revolution',
         'empire','civilization','treaty','poem','literature','grammar','author',
     )
     score=sum(signal in text for signal in signals)
     strong=('equilibrium','iodoform','ozonolysis','grignard','electric field','magnetic field',
-            'climate','volcano','earthquake','photosynthesis','respiration','genetics',
+            'climate','volcano','earthquake','doubly landlocked','double landlocked',
+            'landlocked countries',
+            'photosynthesis','respiration','genetics',
             'constitution','economics','revolution','empire','civilization','literature')
     return len(text)>=100 and (score>=2 or any(signal in text for signal in strong))
 
@@ -125,7 +132,9 @@ Required checks:
   terminology and important exceptions.
 - Geography/Earth science: audit coupled atmospheric, oceanic and orographic causes;
   reject absolute wording that exceeds the stated spatial or temporal evidence. El Nino
-  may modify probability without being necessary for every extreme event.
+  may modify probability without being necessary for every extreme event. For political
+  geography, distinguish open-ocean access from inland seas, verify every named border,
+  and reject examples or analogies that reverse land/water relationships.
 - History/civics/economics: check names, dates, chronology, constitutional or economic
   mechanism, cause versus correlation, regional scope and contested interpretations.
 - Language/literature: check grammar, meaning, textual evidence and whether an

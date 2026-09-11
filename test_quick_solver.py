@@ -95,6 +95,17 @@ class QuickSolverTests(unittest.TestCase):
                   'consequences of the French Revolution for European society and government.')
         self.assertTrue(needs_science_review(question))
 
+    def test_doubly_landlocked_question_uses_geography_checks(self):
+        question=('Which is the only landlocked country entirely surrounded by other '
+                  'landlocked countries, aside from Liechtenstein? Answer: Uzbekistan, '
+                  'bordered by Kazakhstan, Kyrgyzstan, Tajikistan, Afghanistan and Turkmenistan.')
+        self.assertTrue(needs_science_review(question))
+        prompt=solver_prompt(question,[],'English')
+        self.assertIn('open-ocean coast',prompt)
+        self.assertIn('verify every named neighbour',prompt)
+        self.assertIn('supplied a proposed answer',prompt)
+        self.assertIn('independently instead of treating it as evidence',prompt)
+
     def test_math_fence_is_normalized_for_gradio(self):
         raw='Field:\n```math\nE(z)=\\frac{kQz}{(R^2+z^2)^{3/2}}\n```'
         result=normalize_math_markdown(raw)

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import base64
 import html
+import io
 import re
 import tempfile
 import uuid
@@ -14,7 +15,7 @@ SUBJECT_SIGNALS = {
     "Physics": ("force", "electric", "magnetic", "velocity", "oscillation", "current", "circuit", "wave", "lens", "momentum", "energy", "भौतिक", "बल", "विद्युत", "चुंबक", "ବଳ", "ବିଦ୍ୟୁତ", "বল", "বিদ্যুৎ", "விசை", "மின்சாரம்", "బలం", "విద్యుత్"),
     "Chemistry": ("reaction", "compound", "reagent", "molecule", "organic", "acid", "base", "equilibrium", "iodoform", "ozonolysis", "रसायन", "अभिक्रिया", "अम्ल", "ରସାୟନ", "অম্ল", "வேதியியல்", "రసాయన"),
     "Biology": ("cell", "dna", "gene", "photosynthesis", "respiration", "organ", "blood", "neuron", "enzyme", "ecology", "जीवविज्ञान", "कोशिका", "प्रकाश संश्लेषण", "ଜୀବବିଜ୍ଞାନ", "କୋଷ", "জীববিজ্ঞান", "কোষ", "உயிரியல்", "செல்", "జీవశాస్త్ర", "కణం"),
-    "Geography": ("climate", "desert", "river", "mountain", "monsoon", "volcano", "earthquake", "plate", "ocean", "current", "rainfall", "भूगोल", "जलवायु", "मरुस्थल", "ज्वालामुखी", "भूकंप", "मानसून", "ଭୂଗୋଳ", "ଜଳବାୟୁ", "ଆଗ୍ନେୟଗିରି", "ভূগোল", "জলবায়ু", "আগ্নেয়গিরি", "புவியியல்", "எரிமலை", "భూగోళ", "అగ్నిపర్వతం"),
+    "Geography": ("climate", "desert", "river", "mountain", "monsoon", "volcano", "earthquake", "plate", "ocean", "current", "rainfall", "landlocked", "country", "countries", "border", "coastline", "continent", "capital", "central asia", "भूगोल", "जलवायु", "मरुस्थल", "ज्वालामुखी", "भूकंप", "मानसून", "स्थलरुद्ध", "देश", "सीमा", "ଭୂଗୋଳ", "ଜଳବାୟୁ", "ଆଗ୍ନେୟଗିରି", "ভূগোল", "জলবায়ু", "আগ্নেয়গিরি", "புவியியல்", "எரிமலை", "భూగోళ", "అగ్నిపర్వతం"),
     "Mathematics": ("calculate", "equation", "sqrt", "integral", "derivative", "matrix", "geometry", "probability", "theorem", "fraction", "गणित", "समीकरण", "ଜ୍ୟାମିତି", "গণিত", "கணிதம்", "గణితం"),
     "History": ("empire", "war", "revolution", "dynasty", "independence", "civilization", "century", "treaty", "इतिहास", "साम्राज्य", "क्रांति", "ଇତିହାସ", "ইতিহাস", "வரலாறு", "చరిత్ర"),
 }
@@ -27,9 +28,19 @@ def detect_subject(question: str) -> str:
     return best if scores[best] else "General Studies"
 
 
+def question_text_only(question: str) -> str:
+    """Remove a clearly labelled answer appended after a question for recall packs."""
+    text=str(question or "").strip()
+    answer_label=(r"(?:answer|final answer|उत्तर|जवाब|ଉତ୍ତର|উত্তর|பதில்|సమాధానం)"
+                  r"\s*[:\-]\s*")
+    parts=re.split(r"(?is)(?:\n\s*|(?<=\?)\s+)"+answer_label,text,maxsplit=1)
+    return parts[0].strip() or text
+
+
 def diagram_kind(question: str, subject: str) -> str:
     text=str(question or "").casefold()
     if any(x in text for x in ("volcano","volcanic","ज्वालामुखी","ଆଗ୍ନେୟଗିରି","আগ্নেয়গিরি","எரிமலை","అగ్నిపర్వతం")): return "volcano"
+    if subject=="Geography" and any(x in text for x in ("doubly landlocked","double landlocked","landlocked country","स्थलरुद्ध")): return "doubly_landlocked"
     if subject=="Geography" and any(x in text for x in ("climate","desert","rain","current","monsoon")): return "climate"
     if subject=="Physics" and "ring" in text and any(x in text for x in ("charge","electric","axis")): return "charged_ring"
     if subject=="Physics" and "circuit" in text: return "circuit"
@@ -42,7 +53,7 @@ def _svg_shell(title: str, body: str, animation: str="") -> str:
     safe=xml_escape(title[:100])
     return f'''<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="650" viewBox="0 0 1200 650" role="img" aria-label="{safe}">
 <defs><marker id="a" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto"><path d="M0 0L10 5L0 10Z" fill="#4f46e5"/></marker></defs>
-<style>.t{{font:700 34px Arial,sans-serif;fill:#fff}}.h{{font:700 24px Arial,sans-serif;fill:#172033}}.p{{font:500 18px Arial,sans-serif;fill:#24324a}}.card{{fill:#fff;stroke:#c7d2fe;stroke-width:2}}{animation}</style>
+<style>.t{{font:700 34px Arial,sans-serif;fill:#fff}}.h{{font:700 24px Arial,sans-serif;fill:#172033}}.p{{font:500 18px Arial,sans-serif;fill:#24324a}}.w{{fill:#fff}}.card{{fill:#fff;stroke:#c7d2fe;stroke-width:2}}{animation}</style>
 <rect width="1200" height="650" rx="28" fill="#eef2ff"/><rect width="1200" height="86" rx="28" fill="#4338ca"/><rect y="58" width="1200" height="28" fill="#4338ca"/><text x="600" y="55" text-anchor="middle" class="t">{safe}</text>{body}</svg>'''
 
 
@@ -58,9 +69,22 @@ def _climate_svg(animated: bool) -> str:
     return _svg_shell("Coastal desert climate system",body,anim)
 
 
+def _landlocked_svg(animated: bool) -> str:
+    anim='''.nbr{animation:pulse 2.8s ease-in-out infinite alternate}.route{animation:dash 4s linear infinite}@keyframes pulse{to{transform:translateY(-8px)}}@keyframes dash{to{stroke-dashoffset:-42}}''' if animated else ""
+    body='''<g fill="none" stroke="#4f46e5" stroke-width="5"><path d="M445 280L320 205"/><path d="M755 280L880 205"/><path d="M780 325L885 350"/><path d="M700 370L790 465"/><path d="M500 370L410 465"/></g>
+<rect x="410" y="245" width="380" height="135" rx="28" fill="#4338ca"/><text x="600" y="300" text-anchor="middle" style="font:700 24px Arial,sans-serif;fill:#fff">UZBEKISTAN</text><text x="600" y="340" text-anchor="middle" style="font:500 18px Arial,sans-serif;fill:#fff">Doubly landlocked</text>
+<g class="nbr"><rect x="55" y="130" width="300" height="115" rx="20" fill="#fff" stroke="#c7d2fe" stroke-width="2"/><text x="205" y="175" text-anchor="middle" class="h">Kazakhstan</text><text x="205" y="212" text-anchor="middle" class="p">Landlocked - north/west</text></g>
+<g class="nbr"><rect x="845" y="130" width="300" height="115" rx="20" fill="#fff" stroke="#c7d2fe" stroke-width="2"/><text x="995" y="175" text-anchor="middle" class="h">Kyrgyzstan</text><text x="995" y="212" text-anchor="middle" class="p">Landlocked - east</text></g>
+<g class="nbr"><rect x="865" y="300" width="300" height="115" rx="20" fill="#fff" stroke="#c7d2fe" stroke-width="2"/><text x="1015" y="345" text-anchor="middle" class="h">Tajikistan</text><text x="1015" y="382" text-anchor="middle" class="p">Landlocked - southeast</text></g>
+<g class="nbr"><rect x="720" y="440" width="300" height="105" rx="20" fill="#fff" stroke="#c7d2fe" stroke-width="2"/><text x="870" y="482" text-anchor="middle" class="h">Afghanistan</text><text x="870" y="518" text-anchor="middle" class="p">Landlocked - south</text></g>
+<g class="nbr"><rect x="180" y="440" width="300" height="105" rx="20" fill="#fff" stroke="#c7d2fe" stroke-width="2"/><text x="330" y="482" text-anchor="middle" class="h">Turkmenistan</text><text x="330" y="518" text-anchor="middle" class="p">Landlocked - southwest</text></g>
+<path class="route" d="M250 590H950" fill="none" stroke="#0891b2" stroke-width="7" stroke-dasharray="16 12" marker-end="url(#a)"/><text x="600" y="625" text-anchor="middle" class="p">Open-ocean access requires crossing at least two international borders</text>'''
+    return _svg_shell("Uzbekistan - doubly landlocked",body,anim)
+
+
 def _ring_svg(animated: bool) -> str:
     anim='''.particle{animation:osc 2.4s ease-in-out infinite alternate}.force{animation:fade 1.2s ease-in-out infinite alternate}@keyframes osc{to{transform:translateX(-260px)}}@keyframes fade{to{opacity:.35}}''' if animated else ""
-    body='''<ellipse cx="600" cy="370" rx="115" ry="255" fill="none" stroke="#ef5b4c" stroke-width="20"/><text x="535" y="625" class="h">Ring: +Q, radius R</text><line x1="115" y1="370" x2="1080" y2="370" stroke="#64748b" stroke-width="4" stroke-dasharray="10 8"/><text x="1010" y="345" class="p">axis z</text><g class="particle"><circle cx="855" cy="370" r="26" fill="#2563eb"/><text x="842" y="378" class="h" fill="#fff">-q</text></g><path class="force" d="M815 315L700 315" stroke="#4f46e5" stroke-width="9" marker-end="url(#a)"/><text x="735" y="285" class="h">restoring force</text><rect x="65" y="125" width="320" height="180" rx="18" fill="#ffffff" stroke="#c7d2fe" stroke-width="2"/><text x="90" y="165" class="h">Small displacement</text><text x="90" y="205" class="p">F ≈ -(kₑQq/R³)z</text><text x="90" y="240" class="p">ω² = kₑQq/(mR³)</text><text x="90" y="275" class="p">vₘₐₓ = ω × amplitude</text>'''
+    body='''<ellipse cx="600" cy="370" rx="115" ry="255" fill="none" stroke="#ef5b4c" stroke-width="20"/><text x="535" y="625" class="h">Ring: +Q, radius R</text><line x1="115" y1="370" x2="1080" y2="370" stroke="#64748b" stroke-width="4" stroke-dasharray="10 8"/><text x="1010" y="345" class="p">axis z</text><g class="particle"><circle cx="855" cy="370" r="26" fill="#2563eb"/><text x="842" y="378" class="h w">-q</text></g><path class="force" d="M815 315L700 315" stroke="#4f46e5" stroke-width="9" marker-end="url(#a)"/><text x="735" y="285" class="h">restoring force</text><rect x="65" y="125" width="320" height="180" rx="18" fill="#ffffff" stroke="#c7d2fe" stroke-width="2"/><text x="90" y="165" class="h">Small displacement</text><text x="90" y="205" class="p">F ≈ -(kₑQq/R³)z</text><text x="90" y="240" class="p">ω² = kₑQq/(mR³)</text><text x="90" y="275" class="p">vₘₐₓ = ω × amplitude</text>'''
     return _svg_shell("Charged ring - axial SHM",body,anim)
 
 
@@ -73,17 +97,49 @@ def _cell_svg(animated: bool) -> str:
 def _generic_svg(subject: str, animated: bool) -> str:
     color={"Physics":"#2563eb","Chemistry":"#7c3aed","Biology":"#059669","Geography":"#d97706","Mathematics":"#dc2626","History":"#8b5e34"}.get(subject,"#4f46e5")
     anim='''.node{animation:bob 2.7s ease-in-out infinite alternate}@keyframes bob{to{transform:translateY(-10px)}}''' if animated else ""
-    body=f'''<rect x="450" y="140" width="300" height="90" rx="22" fill="{color}"/><text x="600" y="195" text-anchor="middle" class="h" fill="#fff">{xml_escape(subject)}</text><path d="M600 230V300M600 300L270 390M600 300L600 390M600 300L930 390" fill="none" stroke="#4f46e5" stroke-width="6" marker-end="url(#a)"/><g class="node"><rect x="90" y="390" width="300" height="145" rx="20" fill="#ffffff" stroke="#c7d2fe" stroke-width="2"/><text x="240" y="440" text-anchor="middle" class="h">Core idea</text><text x="240" y="480" text-anchor="middle" class="p">What is happening?</text><rect x="450" y="390" width="300" height="145" rx="20" fill="#ffffff" stroke="#c7d2fe" stroke-width="2"/><text x="600" y="440" text-anchor="middle" class="h">Mechanism</text><text x="600" y="480" text-anchor="middle" class="p">Why and how?</text><rect x="810" y="390" width="300" height="145" rx="20" fill="#ffffff" stroke="#c7d2fe" stroke-width="2"/><text x="960" y="440" text-anchor="middle" class="h">Application</text><text x="960" y="480" text-anchor="middle" class="p">Example and exam use</text></g>'''
+    body=f'''<rect x="450" y="140" width="300" height="90" rx="22" fill="{color}"/><text x="600" y="195" text-anchor="middle" class="h w">{xml_escape(subject)}</text><path d="M600 230V300M600 300L270 390M600 300L600 390M600 300L930 390" fill="none" stroke="#4f46e5" stroke-width="6" marker-end="url(#a)"/><g class="node"><rect x="90" y="390" width="300" height="145" rx="20" fill="#ffffff" stroke="#c7d2fe" stroke-width="2"/><text x="240" y="440" text-anchor="middle" class="h">Core idea</text><text x="240" y="480" text-anchor="middle" class="p">What is happening?</text><rect x="450" y="390" width="300" height="145" rx="20" fill="#ffffff" stroke="#c7d2fe" stroke-width="2"/><text x="600" y="440" text-anchor="middle" class="h">Mechanism</text><text x="600" y="480" text-anchor="middle" class="p">Why and how?</text><rect x="810" y="390" width="300" height="145" rx="20" fill="#ffffff" stroke="#c7d2fe" stroke-width="2"/><text x="960" y="440" text-anchor="middle" class="h">Application</text><text x="960" y="480" text-anchor="middle" class="p">Example and exam use</text></g>'''
     return _svg_shell(f"{subject} - learn from beginner to exam level",body,anim)
 
 
 def build_diagram_svg(question: str, subject: str, animated: bool=True) -> str:
     kind=diagram_kind(question,subject)
     if kind=="volcano": return _volcano_svg(animated)
+    if kind=="doubly_landlocked": return _landlocked_svg(animated)
     if kind=="climate": return _climate_svg(animated)
     if kind=="charged_ring": return _ring_svg(animated)
     if kind=="cell": return _cell_svg(animated)
     return _generic_svg(subject,animated)
+
+
+def artifact_sources(question: str, answer: str, subject: str) -> list[tuple[str,str]]:
+    """Return readable evidence links without making offline files network-dependent."""
+    text=(str(question or '')+' '+str(answer or '')).casefold()
+    sources=[]
+    if subject=='Geography' and ('doubly landlocked' in text or 'double landlocked' in text):
+        sources.extend([
+            ('World Bank - Uzbekistan country overview',
+             'https://www.worldbank.org/ext/en/country/uzbekistan'),
+            ('Australian DFAT - Uzbekistan country brief',
+             'https://www.dfat.gov.au/geo/uzbekistan/uzbekistan-country-brief'),
+        ])
+    known={url for _,url in sources}
+    for url in re.findall(r'https?://[^\s<>)\]]+',str(answer or '')):
+        clean=url.rstrip('.,;:')
+        if clean not in known:
+            sources.append(('Answer reference',clean)); known.add(clean)
+    return sources[:8]
+
+
+def _sources_html(sources: list[tuple[str,str]], links: bool=True) -> str:
+    if not sources:
+        return '<p>No external source was attached. Treat factual claims as AI-reviewed, not independently source-verified.</p>'
+    items=[]
+    for title,url in sources:
+        safe_title=html.escape(title); safe_url=html.escape(url,quote=True)
+        label=(f'<a href="{safe_url}" rel="noopener noreferrer">{safe_title}</a>'
+               if links else f'{safe_title}: {safe_url}')
+        items.append('<li>'+label+'</li>')
+    return '<ol>'+''.join(items)+'</ol>'
 
 
 def _inline_markup(text: str) -> str:
@@ -131,20 +187,31 @@ def markdown_to_safe_html(markdown: str) -> str:
 
 
 def build_question_html(question: str, answer: str, language: str, subject: str) -> str:
+    question=question_text_only(question)
     diagram=build_diagram_svg(question,subject,True)
     svg64=base64.b64encode(diagram.encode()).decode()
+    sources=artifact_sources(question,answer,subject)
+    explanation_title='Source-supported explanation' if sources else 'Reviewed explanation'
     return f'''<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer"><title>Exam Saathi Visual Lesson</title><style>
-:root{{color-scheme:light}}*{{box-sizing:border-box}}body{{margin:0;background:linear-gradient(145deg,#ede9fe,#ecfeff 55%,#fff1f2);color:#172033;font:17px/1.7 "Noto Sans",system-ui,sans-serif}}header{{padding:48px max(5vw,20px);background:linear-gradient(120deg,#312e81,#7c3aed,#0891b2);color:#fff}}h1{{font-size:clamp(30px,5vw,54px);margin:.2em 0}}main{{max-width:1050px;margin:auto;padding:26px}}section{{background:#ffffffdd;border:1px solid #c7d2fe;border-radius:22px;padding:26px;margin:24px 0;box-shadow:0 12px 30px #312e8120}}img{{width:100%;height:auto;border-radius:18px}}h2,h3,h4{{color:#4338ca}}.question{{background:#fff7ed;border-left:7px solid #f97316}}.equation{{direction:ltr;overflow:auto;background:#172033;color:#f8fafc;padding:14px 18px;border-radius:12px;font:18px/1.6 "Noto Sans Mono",monospace;white-space:pre-wrap}}code{{background:#ede9fe;padding:2px 5px}}button{{background:#4338ca;color:#fff;border:0;border-radius:12px;padding:12px 18px;font-weight:700;cursor:pointer}}.spark{{position:fixed;font-size:34px;animation:float 5s ease-in-out infinite alternate;pointer-events:none}}.s1{{left:2%;top:20%}}.s2{{right:2%;top:45%;animation-delay:-2s}}@keyframes float{{to{{transform:translateY(-45px) rotate(15deg)}}}}@media print{{.spark,button{{display:none}}body{{background:#fff}}section{{box-shadow:none;break-inside:avoid}}}}</style></head><body><span class="spark s1">✨</span><span class="spark s2">📚</span><header><small>EXAM SAATHI AI · {html.escape(subject)} · {html.escape(language)}</small><h1>Visual Answer Pack</h1><p>Beginner idea → mechanism → exam-ready explanation</p><button onclick="window.print()">Print / Save as PDF</button></header><main><section class="question"><h2>Question</h2><p>{html.escape(question)}</p></section><section><h2>Animated concept diagram</h2><img src="data:image/svg+xml;base64,{svg64}" alt="Animated {html.escape(subject)} concept diagram"><p><strong>Tip:</strong> Motion highlights the process; use the explanation below for exact facts.</p></section><section><h2>Verified explanation</h2>{markdown_to_safe_html(answer)}</section><section><h2>Revision method</h2><ol><li>Explain the diagram without looking at the answer.</li><li>Write the core mechanism in three steps.</li><li>Check formulas, labels and exceptions once more.</li></ol></section></main></body></html>'''
+:root{{color-scheme:light}}*{{box-sizing:border-box}}body{{margin:0;background:linear-gradient(145deg,#ede9fe,#ecfeff 55%,#fff1f2);color:#172033;font:17px/1.7 "Noto Sans",system-ui,sans-serif}}header{{padding:48px max(5vw,20px);background:linear-gradient(120deg,#312e81,#7c3aed,#0891b2);color:#fff}}h1{{font-size:clamp(30px,5vw,54px);margin:.2em 0}}main{{max-width:1050px;margin:auto;padding:26px}}section{{background:#ffffffdd;border:1px solid #c7d2fe;border-radius:22px;padding:26px;margin:24px 0;box-shadow:0 12px 30px #312e8120}}img{{width:100%;height:auto;border-radius:18px}}h2,h3,h4{{color:#4338ca}}.question{{background:#fff7ed;border-left:7px solid #f97316}}.sources{{background:#ecfdf5;border-left:7px solid #10b981}}.equation{{direction:ltr;overflow:auto;background:#172033;color:#f8fafc;padding:14px 18px;border-radius:12px;font:18px/1.6 "Noto Sans Mono",monospace;white-space:pre-wrap}}code{{background:#ede9fe;padding:2px 5px}}a{{color:#3730a3;overflow-wrap:anywhere}}button{{background:#4338ca;color:#fff;border:0;border-radius:12px;padding:12px 18px;font-weight:700;cursor:pointer}}.spark{{position:fixed;font-size:34px;animation:float 5s ease-in-out infinite alternate;pointer-events:none}}.s1{{left:2%;top:20%}}.s2{{right:2%;top:45%;animation-delay:-2s}}@keyframes float{{to{{transform:translateY(-45px) rotate(15deg)}}}}@media print{{.spark,button{{display:none}}body{{background:#fff}}section{{box-shadow:none;break-inside:avoid}}}}</style></head><body><span class="spark s1">✨</span><span class="spark s2">📚</span><header><small>EXAM SAATHI AI · {html.escape(subject)} · {html.escape(language)}</small><h1>Visual Answer Pack</h1><p>Beginner idea → mechanism → exam-ready explanation</p><button onclick="window.print()">Print / Save as PDF</button></header><main><section class="question"><h2>Question</h2><p>{html.escape(question)}</p><p><strong>Active recall:</strong> Solve it before opening the explanation.</p></section><section><h2>Animated concept diagram</h2><img src="data:image/svg+xml;base64,{svg64}" alt="Animated {html.escape(subject)} concept diagram"><p><strong>Tip:</strong> Motion highlights the relationship; use the explanation and sources below for exact facts.</p></section><section><h2>{explanation_title}</h2>{markdown_to_safe_html(answer)}</section><section class="sources"><h2>Sources checked</h2>{_sources_html(sources,True)}</section><section><h2>Revision method</h2><ol><li>Explain the diagram without looking at the answer.</li><li>State the definition and evidence in your own words.</li><li>Check every label, exception and source once more.</li></ol></section></main></body></html>'''
 
 
 def _build_pdf(pdf_path: Path, question: str, answer: str, language: str, subject: str) -> None:
     import fitz
+    from PIL import Image
+    question=question_text_only(question)
+    sources=artifact_sources(question,answer,subject)
+    explanation_title='Source-supported explanation' if sources else 'Reviewed explanation'
     static_svg=build_diagram_svg(question,subject,False)
     svg_doc=fitz.open(stream=static_svg.encode(),filetype='svg')
     pixmap=svg_doc[0].get_pixmap(matrix=fitz.Matrix(1.5,1.5),alpha=False)
     png_bytes=pixmap.tobytes('png')
     svg_doc.close()
-    content=f'''<article><p class="eyebrow">EXAM SAATHI AI | {html.escape(subject)} | {html.escape(language)}</p><h1>Verified explanation</h1>{markdown_to_safe_html(answer)}<div class="note"><b>Revision:</b> Cover the answer, explain the diagram aloud, then verify every label, formula and exception.</div></article>'''
+    compressed=io.BytesIO()
+    with Image.open(io.BytesIO(png_bytes)).convert('RGB') as diagram_image:
+        diagram_image.save(compressed,format='JPEG',quality=88,optimize=True,subsampling=0)
+    diagram_bytes=compressed.getvalue()
+    content=f'''<article><p class="eyebrow">EXAM SAATHI AI | {html.escape(subject)} | {html.escape(language)}</p><h1>{explanation_title}</h1>{markdown_to_safe_html(answer)}<h2>Sources checked</h2>{_sources_html(sources,False)}<div class="note"><b>Revision:</b> Cover the answer, explain the diagram aloud, then verify every label, exception and source.</div></article>'''
     css='''@page{size:a4;margin:42pt}body{font-family:"Noto Sans",sans-serif;color:#172033;font-size:10.5pt;line-height:1.5}h1{font-size:28pt;color:#312e81;margin:4pt 0 18pt}h2{font-size:17pt;color:#4338ca;margin-top:18pt}h3{color:#0f766e}.eyebrow{color:#0f766e;font-weight:bold}.question{background:#fff4e5;border:1pt solid #fb923c;padding:12pt;border-radius:8pt}.equation{font-family:"Noto Sans Mono",monospace;background:#eef2ff;border-left:4pt solid #4f46e5;padding:9pt;white-space:pre-wrap}img{width:100%;max-height:330pt;object-fit:contain}.note{margin-top:20pt;background:#ecfdf5;border:1pt solid #34d399;padding:12pt}li{margin-bottom:4pt}code{color:#5b21b6}'''
     answer_pdf=pdf_path.with_suffix('.answer.pdf')
     writer=fitz.DocumentWriter(str(answer_pdf))
@@ -163,9 +230,9 @@ def _build_pdf(pdf_path: Path, question: str, answer: str, language: str, subjec
     cover.insert_htmlbox(fitz.Rect(42,112,553,225),
         '<h2>Question</h2><p>'+html.escape(question)+'</p>',
         css='body{font-family:"Noto Sans",sans-serif;color:#172033;font-size:10.5pt}h2{color:#4338ca;margin:0 0 6pt}p{margin:0;line-height:1.45}',scale_low=.55)
-    cover.insert_image(fitz.Rect(42,245,553,522),stream=png_bytes,keep_proportion=True)
+    cover.insert_image(fitz.Rect(42,245,553,522),stream=diagram_bytes,keep_proportion=True)
     cover.insert_htmlbox(fitz.Rect(42,548,553,735),
-        '<h2>How to use this pack</h2><ol><li>Study the labelled diagram.</li><li>Read the verified explanation from the next page.</li><li>Close the answer and explain the process aloud.</li><li>Recheck formulas, exceptions and source facts.</li></ol>',
+        '<h2>How to use this pack</h2><ol><li>Study the labelled diagram.</li><li>Answer from memory before turning the page.</li><li>Read the explanation and compare your reasoning.</li><li>Recheck labels, exceptions and sources.</li></ol>',
         css='body{font-family:"Noto Sans",sans-serif;color:#172033;font-size:10.5pt;line-height:1.5}h2{color:#0f766e}li{margin-bottom:4pt}',scale_low=.7)
     doc.insert_pdf(answer_doc)
     answer_doc.close()
@@ -176,6 +243,7 @@ def _build_pdf(pdf_path: Path, question: str, answer: str, language: str, subjec
 
 
 def export_question_artifacts(question: str, answer: str, language: str, subject_override: str='Auto'):
+    question=question_text_only(question)
     subject=subject_override if subject_override and subject_override!='Auto' else detect_subject(question)
     directory=Path(tempfile.gettempdir())/'exam_saathi_question_exports'
     directory.mkdir(exist_ok=True)

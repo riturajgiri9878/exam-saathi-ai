@@ -1,4 +1,4 @@
-# Exam Saathi AI — Version 4.0 Verified Visual Study Packs
+# Exam Saathi AI — Version 4.1 Source-Supported Geography Visuals
 
 Start with [V3_0_START_HERE.md](V3_0_START_HERE.md) for the current update,
 deployment steps, detailed HTML download and validation limits. Full Chapter
@@ -52,6 +52,13 @@ answer. Standard PDFs are intentionally static because common PDF readers do not
 reliably support animation; the HTML carries motion without needing an account, API key
 or internet connection after download. Volcano, coastal-climate, charged-ring and cell
 questions receive dedicated diagrams; other subjects receive a structured concept map.
+
+Version 4.1 fixes political-geography packs end to end. Doubly-landlocked questions
+are now classified as Geography and receive a dedicated Uzbekistan-neighbour diagram
+instead of the generic concept map. A clearly appended student answer is hidden from
+the question panel for active recall, recognised factual packs include readable source
+links, unsupported packs are labelled reviewed rather than verified, and diagram images
+are compressed before PDF embedding for substantially smaller downloads.
 
 Complex Biology, Geography, History, Civics, Economics and Literature questions now
 join Physics and Chemistry in the independent examiner workflow. Factual questions can

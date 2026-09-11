@@ -1,7 +1,7 @@
 import unittest
 from quick_solver import (solve_question,solver_prompt,verify_numeric_payload,
                           needs_numeric_verification,needs_science_review,
-                          review_science_answer)
+                          review_science_answer,normalize_math_markdown)
 
 
 class QuickSolverTests(unittest.TestCase):
@@ -83,6 +83,23 @@ class QuickSolverTests(unittest.TestCase):
 
     def test_short_science_definition_avoids_second_call(self):
         self.assertFalse(needs_science_review('What is the iodoform test?'))
+
+    def test_electrostatics_problem_uses_science_review(self):
+        question=('A charged particle is displaced along the electric field axis of a '
+                  'uniformly charged ring. Calculate its time period and maximum speed '
+                  'for small oscillations, checking the force direction and dimensions.')
+        self.assertTrue(needs_science_review(question))
+
+    def test_long_history_question_uses_independent_review(self):
+        question=('Analyze the causes, chronology, competing interpretations and long-term '
+                  'consequences of the French Revolution for European society and government.')
+        self.assertTrue(needs_science_review(question))
+
+    def test_math_fence_is_normalized_for_gradio(self):
+        raw='Field:\n```math\nE(z)=\\frac{kQz}{(R^2+z^2)^{3/2}}\n```'
+        result=normalize_math_markdown(raw)
+        self.assertNotIn('```math',result)
+        self.assertIn('$$\nE(z)=\\frac',result)
 
     def test_follow_up_context_and_selected_language(self):
         history=[{'role':'user','content':'What is force?'},

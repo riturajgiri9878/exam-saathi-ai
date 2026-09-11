@@ -15,6 +15,8 @@ from learning_modes import (profile, register_papers, prioritize_notes, teach_cl
                             export_catalog, import_catalog, catalog_summary)
 from smart_chat import reply as smart_reply
 from quick_solver import solve_question
+from question_artifacts import export_question_artifacts
+from smart_chat import web_answer
 from chapter_teacher import lesson_steps,render_lesson,source_signature,lesson_plain
 
 from core import (
@@ -343,11 +345,32 @@ def smart_chat_ui(question,history,analysis,language,allow_web):
         return gr.skip(),'','Chat/search unavailable or language validation failed. Check Gemini model/access and retry. Your question has been kept.'
 
 
-def quick_solver_ui(question,history,language):
+def quick_solver_ui(question,history,language,subject_choice,allow_web):
     try:
-        return solve_question(question,history,language), '', ''
+        updated=solve_question(question,history,language)
+        answer=updated[-1].get('content','') if updated else ''
+        web_status=''
+        if allow_web:
+            try:
+                evidence,_=web_answer(question,language)
+                answer+='\n\n---\n\n## 🌐 Source check\n\n'+evidence
+                updated[-1]['content']=answer
+                web_status=' Official/educational web evidence was requested and appended with links.'
+            except Exception:
+                web_status=' Web verification was requested but unavailable; the reviewed core answer is retained.'
+        try:
+            pdf_file,html_file,subject=export_question_artifacts(
+                question,answer,language,subject_choice,
+            )
+            status=(f'✅ {subject} visual pack ready. PDF is colorful and printable; '
+                    'HTML contains safe offline animation and works without an API key.'+web_status)
+        except Exception:
+            pdf_file=html_file=None
+            status=('⚠️ Answer is ready, but the visual downloads could not be created. '
+                    'The answer remains available above; check Render logs before retrying.')
+        return updated, '', '', pdf_file, html_file, status
     except Exception as error:
-        return gr.skip(), gr.skip(), '❌ '+html.escape(str(error))
+        return gr.skip(), gr.skip(), '❌ '+html.escape(str(error)),None,None,''
 
 
 def approve_corrected_text(edited_text: str, current_state: dict[str, Any]):
@@ -918,7 +941,7 @@ with gr.Blocks(title="Exam Saathi AI") as demo:
         <div class="exam-header">
           <h1>📘 EXAM SAATHI AI</h1>
           <h2>Secure Agentic AI Study Assistant</h2>
-          <p><strong>Version 3.6 — Independent Science Examiner</strong></p>
+          <p><strong>Version 4.0 — Verified Visual Study Packs</strong></p>
           <p>PDF/Image → OCR → Human Review → NLP → Embeddings → Smart Notes → Questions → Trends</p>
           {AUTH_CONTROL}
         </div>
@@ -960,16 +983,37 @@ Exam Saathi विद्यार्थियों के study documents क�
             quick_language = gr.Dropdown(
                 choices=LANGUAGES,value="Hinglish",label="Answer language",
             )
-            quick_chat = gr.Chatbot(label="Your solved questions",height=420,elem_id="quick-solver-chat")
+            quick_subject = gr.Dropdown(
+                choices=["Auto","Mathematics","Physics","Chemistry","Biology","Geography","History","General Studies"],
+                value="Auto",label="Subject (Auto works for most questions; choose manually if needed)",
+            )
+            quick_chat = gr.Chatbot(
+                label="Your solved questions",height=420,elem_id="quick-solver-chat",
+                latex_delimiters=[
+                    {"left":"$$","right":"$$","display":True},
+                    {"left":r"\(","right":r"\)","display":False},
+                ],
+            )
             quick_question = gr.Textbox(
                 label="Type one question",
                 placeholder=r"Example: Find the exact value of (sqrt(18)/(sqrt(12)-sqrt(6)))^10",
                 lines=3,
             )
+            quick_web = gr.Checkbox(
+                label="Verify factual questions with cited online sources (slower)",value=False,
+            )
             with gr.Row():
                 quick_send = gr.Button("➤ Solve step by step",variant="primary")
                 quick_clear = gr.Button("New question")
             quick_error = gr.Markdown()
+            gr.Markdown(
+                "### 📥 Download your visual answer\n\nEvery solved question creates the same answer in two formats: a reliable static PDF for printing and an animated offline HTML lesson for interactive study. Standard PDFs do not reliably play animation, so animation is kept in the HTML instead of pretending it will work in every PDF reader.",
+                elem_classes=["exam-card"],
+            )
+            with gr.Row():
+                quick_pdf = gr.File(label="Download colorful PDF",interactive=False,elem_classes=["study-file"])
+                quick_html = gr.File(label="Download animated HTML",interactive=False,elem_classes=["study-file"])
+            quick_visual_status = gr.Markdown()
             gr.Markdown("---\n## 📚 Upload Study Material",elem_classes=["exam-card"])
             gr.Markdown(
             "Select up to 10 PDFs or camera images together. "
@@ -1245,9 +1289,11 @@ Exam Saathi विद्यार्थियों के study documents क�
             teacher_output,teacher_history,teacher_answer],show_progress='minimal').then(
                 fn=reset_lesson_for_source,inputs=[current_analysis,detailed_lesson],outputs=lesson_reset_outputs)
     chat_transcribe.click(fn=transcribe_voice_ui,inputs=[chat_mic,chat_language],outputs=[chat_question,chat_voice_status])
-    quick_send.click(fn=quick_solver_ui,inputs=[quick_question,quick_chat,quick_language],outputs=[quick_chat,quick_question,quick_error],show_progress='minimal')
-    quick_question.submit(fn=quick_solver_ui,inputs=[quick_question,quick_chat,quick_language],outputs=[quick_chat,quick_question,quick_error],show_progress='minimal')
-    quick_clear.click(fn=lambda:([], '', ''),outputs=[quick_chat,quick_question,quick_error])
+    quick_outputs=[quick_chat,quick_question,quick_error,quick_pdf,quick_html,quick_visual_status]
+    quick_inputs=[quick_question,quick_chat,quick_language,quick_subject,quick_web]
+    quick_send.click(fn=quick_solver_ui,inputs=quick_inputs,outputs=quick_outputs,show_progress='minimal')
+    quick_question.submit(fn=quick_solver_ui,inputs=quick_inputs,outputs=quick_outputs,show_progress='minimal')
+    quick_clear.click(fn=lambda:([], '', '',None,None,''),outputs=quick_outputs)
     for trigger in [chat_send.click,chat_question.submit]:
         trigger(fn=smart_chat_ui,inputs=[chat_question,chat_box,current_analysis,chat_language,chat_web],outputs=[chat_box,chat_suggestions,chat_error],show_progress='minimal')
     chat_clear.click(fn=lambda:([], '', ''),outputs=[chat_box,chat_suggestions,chat_error])

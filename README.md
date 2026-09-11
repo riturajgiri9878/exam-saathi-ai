@@ -1,4 +1,4 @@
-# Exam Saathi AI — Version 3.6 Independent Science Examiner
+# Exam Saathi AI — Version 4.0 Verified Visual Study Packs
 
 Start with [V3_0_START_HERE.md](V3_0_START_HERE.md) for the current update,
 deployment steps, detailed HTML download and validation limits. Full Chapter
@@ -38,6 +38,25 @@ Physics prompts. It independently checks carbon/functional-group continuity, nam
 tests, reagents, stoichiometry, conservation laws, dimensions and units. The reviewed
 answer replaces the first draft, and an incomplete review is blocked. Quick Solver chat
 bubbles are also forced to a readable light palette in browser dark mode.
+
+Version 3.7 enforces KaTeX-compatible `$$...$$` equations in Quick Solver, converts
+accidental fenced math blocks before display, and explicitly configures Gradio's math
+delimiters. Complex electrostatics and magnetism problems now enter the independent
+science review, which checks signed force direction, units, dimensions, square roots
+and agreement between the working and final formula.
+
+Version 4.0 turns every Quick Solver response into a downloadable visual lesson. The
+app detects the subject, generates a safe labelled diagram, creates a colorful static
+A4 PDF and a separate animated offline HTML file, and keeps both downloads beside the
+answer. Standard PDFs are intentionally static because common PDF readers do not
+reliably support animation; the HTML carries motion without needing an account, API key
+or internet connection after download. Volcano, coastal-climate, charged-ring and cell
+questions receive dedicated diagrams; other subjects receive a structured concept map.
+
+Complex Biology, Geography, History, Civics, Economics and Literature questions now
+join Physics and Chemistry in the independent examiner workflow. Factual questions can
+optionally receive cited online-source verification; this is off by default to avoid
+sending a student's question to an external search service without consent.
 
 ## Version 2.0 features
 

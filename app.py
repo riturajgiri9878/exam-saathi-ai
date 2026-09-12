@@ -376,9 +376,14 @@ def _verification_panel(answer: dict[str, Any]) -> str:
     if route.get("uploaded_evidence"):
         checks.append("uploaded notes")
     check_text = ", ".join(checks) if checks else "independent reviewer"
+    providers = ", ".join(
+        str(model) for model in answer.get("models", [])
+        if model and model != "review-unavailable"
+    ) or "not reported"
     return (
         f"{icon} **{status}** · Confidence: **{answer.get('confidence', 0)}%** · "
         f"Subject: **{answer.get('subject', 'General Studies')}** · Checks: {check_text} · "
+        f"Models: **{providers}** · "
         f"Engine: **v{answer.get('engine_version', ENGINE_VERSION)}**"
     )
 
@@ -1237,7 +1242,8 @@ Exam Saathi विद्यार्थियों के study documents क�
             gr.Markdown(
                 f"## Ask Exam Saathi · Verified Engine v{ENGINE_VERSION}\n\n"
                 "Ask any standalone question or first process your PDF/photo/text for source-grounded answers. "
-                "Hard STEM calculations are independently checked; current and exceptional facts are web-grounded.",
+                "Groq handles text reasoning first; Compound uses web/code tools for current facts and STEM calculations. "
+                "Gemini remains the OCR and automatic answer backup when configured.",
                 elem_classes=["exam-card"],
             )
             answer_language = gr.Dropdown(
@@ -1311,6 +1317,8 @@ Exam Saathi विद्यार्थियों के study documents क�
 
 - Uploaded content is processed for the current app session.
 - Low-confidence scanned documents are sent to Google Gemini for OCR when GEMINI_API_KEY is configured.
+- Typed questions are sent to Groq first when GROQ_API_KEY is configured; Gemini is the optional answer fallback.
+- Current-fact questions may use Groq Compound web search. Online sources are listed with the answer.
 - Recorded voice is sent to Google Gemini only when the student presses Convert Voice; it is used to create the question transcript.
 - The application does not intentionally publish student documents.
 - Friend quiz export contains generated questions, answers and source references—not the original uploaded PDF.

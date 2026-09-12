@@ -24,14 +24,28 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
+from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
+from urllib.request import Request, urlopen
 
 import pymupdf
 
 
-ENGINE_VERSION = "4.2.0"
-ANSWER_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.8-flash").strip()
-FALLBACK_MODELS = [
+ENGINE_VERSION = "4.3.0"
+ANSWER_PROVIDER = os.environ.get("ANSWER_PROVIDER", "auto").strip().lower()
+GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
+GROQ_REASONING_MODEL = os.environ.get(
+    "GROQ_REASONING_MODEL", "openai/gpt-oss-120b"
+).strip()
+GROQ_WEB_MODEL = os.environ.get("GROQ_WEB_MODEL", "groq/compound").strip()
+GROQ_COMPOUND_FALLBACK_MODEL = os.environ.get(
+    "GROQ_COMPOUND_FALLBACK_MODEL", "groq/compound-mini"
+).strip()
+GROQ_FALLBACK_MODEL = os.environ.get(
+    "GROQ_FALLBACK_MODEL", "openai/gpt-oss-20b"
+).strip()
+GEMINI_ANSWER_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.8-flash").strip()
+GEMINI_FALLBACK_MODELS = [
     item.strip()
     for item in os.environ.get("GEMINI_FALLBACK_MODELS", "gemini-3.6-flash").split(",")
     if item.strip()
@@ -297,10 +311,136 @@ def _response_used_code(response: Any) -> bool:
         return False
 
 
-def _default_generate(prompt: str, use_web: bool, use_code: bool) -> tuple[str, list[dict[str, str]], bool, str]:
+def _groq_sources(response: dict[str, Any]) -> list[dict[str, str]]:
+    """Extract citation URLs from current and older Compound response shapes."""
+    sources: list[dict[str, str]] = []
+
+    def walk(value: Any) -> None:
+        if isinstance(value, dict):
+            uri = str(value.get("url") or value.get("uri") or "").strip()
+            title = str(value.get("title") or value.get("name") or uri).strip()
+            if uri and urlparse(uri).scheme in {"http", "https"}:
+                item = {"title": title or uri, "uri": uri}
+                if item not in sources:
+                    sources.append(item)
+            for child in value.values():
+                walk(child)
+        elif isinstance(value, list):
+            for child in value:
+                walk(child)
+
+    try:
+        message = response["choices"][0]["message"]
+    except (KeyError, IndexError, TypeError):
+        message = {}
+    walk(message.get("citations", []))
+    walk(message.get("executed_tools", []))
+    walk(response.get("citations", []))
+    return sources
+
+
+def _groq_used_code(response: dict[str, Any]) -> bool:
+    try:
+        tools = response["choices"][0]["message"].get("executed_tools", [])
+    except (KeyError, IndexError, TypeError, AttributeError):
+        return False
+    for item in tools if isinstance(tools, list) else []:
+        item_text = json.dumps(item, ensure_ascii=False).casefold()
+        if any(term in item_text for term in (
+            "code_interpreter", "code execution", '"type": "code"', "wolfram_alpha"
+        )):
+            return True
+    return False
+
+
+def _provider_error_text(error: Exception) -> str:
+    """Return a short, actionable error without leaking credentials."""
+    raw = str(error).replace("\n", " ")
+    if isinstance(error, HTTPError):
+        try:
+            raw = error.read().decode("utf-8", errors="replace")
+        except Exception:
+            raw = str(error)
+    lowered = raw.casefold()
+    if "429" in raw or "resource_exhausted" in lowered or "rate limit" in lowered or "quota" in lowered:
+        return "free quota/rate limit reached"
+    if "401" in raw or "403" in raw or "api key" in lowered or "unauthorized" in lowered:
+        return "API key is missing, invalid, or not permitted"
+    if isinstance(error, (TimeoutError, URLError)) or "timed out" in lowered or "timeout" in lowered:
+        return "provider timed out"
+    if "404" in raw or "not_found" in lowered or "not found" in lowered:
+        return "configured model is unavailable"
+    return re.sub(
+        r"(?i)(bearer\s+|api[_ -]?key[=: ]+)[^\s,;]+", r"\1[hidden]", raw
+    )[:180]
+
+
+def _groq_generate(prompt: str, use_web: bool, use_code: bool) -> tuple[str, list[dict[str, str]], bool, str]:
+    api_key = os.environ.get("GROQ_API_KEY", "").strip()
+    if not api_key:
+        raise RuntimeError("GROQ_API_KEY is not configured.")
+
+    # The free GPT-OSS tier has a smaller per-minute token budget than Compound.
+    # Route long uploaded-note/reviewer prompts to Compound as well, so a valid
+    # answer is not rejected merely because the context is large.
+    compound_request = use_web or use_code or len(prompt) > 16000
+    models = (
+        [GROQ_WEB_MODEL, GROQ_COMPOUND_FALLBACK_MODEL]
+        if compound_request
+        else [GROQ_REASONING_MODEL, GROQ_FALLBACK_MODEL]
+    )
+    errors: list[str] = []
+    for model in list(dict.fromkeys(item for item in models if item)):
+        payload: dict[str, Any] = {
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.1,
+            "max_completion_tokens": 8000 if compound_request else 4000,
+            "response_format": {"type": "json_object"},
+            "citation_options": "enabled",
+        }
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+            "Groq-Model-Version": "latest",
+            "User-Agent": f"Exam-Saathi/{ENGINE_VERSION}",
+        }
+        if model.startswith("groq/compound"):
+            enabled_tools: list[str] = []
+            if use_web:
+                enabled_tools.extend(["web_search", "visit_website"])
+            if use_code:
+                enabled_tools.extend(["code_interpreter", "wolfram_alpha"])
+            if enabled_tools:
+                payload["compound_custom"] = {
+                    "tools": {"enabled_tools": list(dict.fromkeys(enabled_tools))}
+                }
+        elif model.startswith("openai/gpt-oss"):
+            payload["reasoning_effort"] = "high"
+
+        request = Request(
+            GROQ_API_URL,
+            data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+            headers=headers,
+            method="POST",
+        )
+        try:
+            with urlopen(request, timeout=ANSWER_TIMEOUT_SECONDS) as response:
+                value = json.loads(response.read().decode("utf-8"))
+            message = value["choices"][0]["message"]
+            content = str(message.get("content", "")).strip()
+            if not content:
+                raise RuntimeError("empty model response")
+            return content, _groq_sources(value), _groq_used_code(value), f"groq:{model}"
+        except Exception as error:
+            errors.append(f"{model}: {_provider_error_text(error)}")
+    raise RuntimeError("Groq unavailable. " + " | ".join(errors))
+
+
+def _gemini_generate(prompt: str, use_web: bool, use_code: bool) -> tuple[str, list[dict[str, str]], bool, str]:
     api_key = os.environ.get("GEMINI_API_KEY", "").strip()
     if not api_key:
-        raise RuntimeError("GEMINI_API_KEY is not configured in Render Environment.")
+        raise RuntimeError("GEMINI_API_KEY is not configured.")
     from google import genai
     from google.genai import types
 
@@ -321,16 +461,44 @@ def _default_generate(prompt: str, use_web: bool, use_code: bool) -> tuple[str, 
         tools=tools or None,
     )
     errors: list[str] = []
-    models = list(dict.fromkeys([ANSWER_MODEL, *FALLBACK_MODELS]))[:2]
+    models = list(dict.fromkeys([GEMINI_ANSWER_MODEL, *GEMINI_FALLBACK_MODELS]))[:2]
     for model in models:
         try:
             response = client.models.generate_content(model=model, contents=prompt, config=config)
             if not getattr(response, "text", ""):
                 raise RuntimeError("empty model response")
-            return response.text, _response_sources(response), _response_used_code(response), model
+            return response.text, _response_sources(response), _response_used_code(response), f"gemini:{model}"
         except Exception as error:  # provider exceptions vary across SDK releases
-            errors.append(f"{model}: {str(error)[:260]}")
-    raise RuntimeError("Answer models unavailable. " + " | ".join(errors))
+            errors.append(f"{model}: {_provider_error_text(error)}")
+    raise RuntimeError("Gemini unavailable. " + " | ".join(errors))
+
+
+def _default_generate(prompt: str, use_web: bool, use_code: bool) -> tuple[str, list[dict[str, str]], bool, str]:
+    """Use Groq first, then Gemini, without exposing secret-bearing raw errors."""
+    provider = ANSWER_PROVIDER if ANSWER_PROVIDER in {"auto", "groq", "gemini"} else "auto"
+    attempts: list[tuple[str, Callable[..., tuple[str, list[dict[str, str]], bool, str]]]] = []
+    if provider in {"auto", "groq"}:
+        attempts.append(("Groq", _groq_generate))
+    if provider in {"auto", "gemini"}:
+        attempts.append(("Gemini", _gemini_generate))
+
+    errors: list[str] = []
+    for name, generate in attempts:
+        if name == "Groq" and not os.environ.get("GROQ_API_KEY", "").strip():
+            errors.append("Groq: GROQ_API_KEY not configured")
+            continue
+        if name == "Gemini" and not os.environ.get("GEMINI_API_KEY", "").strip():
+            errors.append("Gemini: GEMINI_API_KEY not configured")
+            continue
+        try:
+            return generate(prompt, use_web, use_code)
+        except Exception as error:
+            errors.append(f"{name}: {_provider_error_text(error)}")
+    raise RuntimeError(
+        "Answer service is temporarily unavailable. "
+        + " | ".join(errors)
+        + ". Check Render keys/limits, wait for quota reset, then retry."
+    )
 
 
 def _normalise_payload(payload: dict[str, Any], subject: str, language: str) -> dict[str, Any]:
@@ -465,12 +633,27 @@ def solve_question(
     )
     draft = _normalise_payload(_parse_json(draft_text), route.subject, language)
 
-    review_text, review_sources, review_code, review_model = generator(
-        _build_review_prompt(question, language, route, rag_text, draft),
-        route.use_web,
-        route.use_code,
-    )
-    answer = _normalise_payload(_parse_json(review_text), route.subject, language)
+    review_sources: list[dict[str, str]] = []
+    review_code = False
+    review_model = "review-unavailable"
+    try:
+        review_text, review_sources, review_code, review_model = generator(
+            _build_review_prompt(question, language, route, rag_text, draft),
+            route.use_web,
+            route.use_code,
+        )
+        answer = _normalise_payload(_parse_json(review_text), route.subject, language)
+    except Exception as review_error:
+        # A free tier can run out between pass 1 and pass 2. Keep the useful
+        # first pass, but never label it as independently verified.
+        answer = draft
+        answer["verification_status"] = "REVIEW_NEEDED"
+        answer["confidence"] = min(answer.get("confidence", 0), 69)
+        answer["verification_notes"].append(
+            "Independent review pass could not finish: "
+            + _provider_error_text(review_error)
+            + ". The draft is shown instead of being discarded."
+        )
     _enforce_specific_diagram(question, answer)
     sources = _dedupe_sources([*rag_sources, *draft_sources, *review_sources])
     _apply_verification_gate(answer, route, sources, draft_code or review_code)
@@ -775,7 +958,7 @@ def _pdf_document(answer: dict[str, Any], markdown_text: str, svg: str) -> str:
     status = html.escape(str(answer.get("verification_status", "REVIEW_NEEDED")))
     body = _markdown_to_safe_html(markdown_text)
     return f'''<!doctype html><html><head><meta charset="utf-8"><style>
-body{{color:#172033;font:12pt/1.55 Arial,sans-serif;margin:0}}.cover{{border:2px solid #4338ca;padding:18px;border-radius:14px;margin-bottom:18px}}.brand{{font-size:10pt;font-weight:700;color:#0f766e;letter-spacing:1px}}h1{{font-size:27pt;color:#312e81;margin:8px 0}}h2{{font-size:19pt;color:#4338ca;margin-top:20px}}h3{{font-size:15pt;color:#0f766e}}h4{{font-size:13pt;color:#4338ca}}.badge{{display:inline-block;border:2px solid #10b981;background:#ecfdf5;color:#065f46;padding:5px 10px;font-weight:700}}.diagram{{border:1px solid #c7d2fe;padding:14px;margin:14px 0}}.diagram svg{{width:100%;height:auto}}code{{background:#ede9fe;color:#5b21b6;padding:2px 4px}}.math{{font-family:"DejaVu Sans",Arial,sans-serif;font-weight:600;color:#312e81}}.frac{{display:inline-flex;vertical-align:middle;flex-direction:column;text-align:center;line-height:1.05;margin:0 .12em}}.frac>span:first-child{{border-bottom:1px solid currentColor;padding:0 .12em}}a{{color:#3730a3}}li{{margin-bottom:5px}}p{{margin:6px 0 10px}}</style></head><body><div class="cover"><div class="brand">EXAM SAATHI AI - VERIFIED ANSWER ENGINE v{ENGINE_VERSION}</div><h1>{title}</h1><span class="badge">{status}</span></div><div class="diagram"><h2>Question-Specific Concept Diagram</h2>{svg}<p><strong>PDF note:</strong> This is the clear static frame. Open the HTML guide for animation.</p></div>{body}</body></html>'''
+body{{color:#172033;font:12pt/1.55 Arial,sans-serif;margin:0}}.cover{{border:2px solid #4338ca;padding:18px;border-radius:14px;margin-bottom:18px}}.brand{{font-size:10pt;font-weight:700;color:#0f766e;letter-spacing:1px}}h1{{font-size:27pt;color:#312e81;margin:8px 0}}h2{{font-size:19pt;color:#4338ca;margin-top:20px;break-after:avoid;page-break-after:avoid}}h3{{font-size:15pt;color:#0f766e;break-after:avoid;page-break-after:avoid}}h4{{font-size:13pt;color:#4338ca;break-after:avoid;page-break-after:avoid}}.badge{{display:inline-block;border:2px solid #10b981;background:#ecfdf5;color:#065f46;padding:5px 10px;font-weight:700}}.diagram{{border:1px solid #c7d2fe;padding:14px;margin:14px 0}}.diagram svg{{width:92%;height:auto;display:block;margin:auto}}code{{background:#ede9fe;color:#5b21b6;padding:2px 4px}}.math{{font-family:"DejaVu Sans",Arial,sans-serif;font-weight:600;color:#312e81}}.frac{{display:inline-flex;vertical-align:middle;flex-direction:column;text-align:center;line-height:1.05;margin:0 .12em}}.frac>span:first-child{{border-bottom:1px solid currentColor;padding:0 .12em}}a{{color:#3730a3}}li{{margin-bottom:5px}}p{{margin:6px 0 10px;orphans:2;widows:2}}</style></head><body><div class="cover"><div class="brand">EXAM SAATHI AI - VERIFIED ANSWER ENGINE v{ENGINE_VERSION}</div><h1>{title}</h1><span class="badge">{status}</span></div><div class="diagram"><h2>Question-Specific Concept Diagram</h2>{svg}<p><strong>PDF note:</strong> This is the clear static frame. Open the HTML guide for animation.</p></div>{body}</body></html>'''
 
 
 def _write_pdf_from_html(html_text: str, pdf_path: Path) -> None:
@@ -819,7 +1002,7 @@ def create_answer_artifacts(answer: dict[str, Any]) -> tuple[str, str]:
     # Keep temporary Render storage bounded. Only this engine's generated files
     # are eligible; uploaded student files and project files are never touched.
     generated = sorted(
-        ARTIFACT_DIR.glob("exam_saathi_v4_2_0_*.*"),
+        ARTIFACT_DIR.glob("exam_saathi_v*_*.*"),
         key=lambda path: path.stat().st_mtime,
         reverse=True,
     )

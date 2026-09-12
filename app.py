@@ -14,10 +14,15 @@ from study_languages import LANGUAGES, translate_analysis
 from learning_modes import (profile, register_papers, prioritize_notes, teach_class,
                             export_catalog, import_catalog, catalog_summary)
 from smart_chat import reply as smart_reply
-from quick_solver import solve_question
-from question_artifacts import export_question_artifacts
-from smart_chat import web_answer
 from chapter_teacher import lesson_steps,render_lesson,source_signature,lesson_plain
+
+from answer_engine import (
+    ENGINE_VERSION,
+    SUPPORTED_LANGUAGES,
+    answer_markdown,
+    create_answer_artifacts,
+    solve_question,
+)
 
 from core import (
     SECURITY_GUARD,
@@ -345,30 +350,67 @@ def smart_chat_ui(question,history,analysis,language,allow_web):
         return gr.skip(),'','Chat/search unavailable or language validation failed. Check Gemini model/access and retry. Your question has been kept.'
 
 
-def quick_solver_ui(question,history,language,subject_choice,allow_web):
+def _question_context(question: str, analysis: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return only the most relevant uploaded-note chunks for one question."""
+    if not isinstance(analysis, dict):
+        return []
+    chunks = analysis.get("chunks", [])
+    if not chunks:
+        return []
     try:
-        updated=solve_question(question,history,language)
-        answer=updated[-1].get('content','') if updated else ''
-        web_status=''
-        if allow_web:
-            try:
-                evidence,_=web_answer(question,language)
-                answer+='\n\n---\n\n## 🌐 Source check\n\n'+evidence
-                updated[-1]['content']=answer
-                web_status=' Official/educational web evidence was requested and appended with links.'
-            except Exception:
-                web_status=' Web verification was requested but unavailable; the reviewed core answer is retained.'
-        try:
-            pdf_file,html_file,subject=export_question_artifacts(
-                question,answer,language,subject_choice,
-            )
-            status=(f'✅ {subject} visual pack ready. PDF is colorful and printable; '
-                    'HTML contains safe offline animation and works without an API key.'+web_status)
-        except Exception:
-            pdf_file=html_file=None
-            status=('⚠️ Answer is ready, but the visual downloads could not be created. '
-                    'The answer remains available above; check Render logs before retrying.')
-        return updated, '', '', pdf_file, html_file, status
+        return semantic_search(question, chunks, top_k=6)
+    except Exception:
+        # The answer engine can still solve from general knowledge/web tools.
+        return []
+
+
+def _verification_panel(answer: dict[str, Any]) -> str:
+    status = answer.get("verification_status", "REVIEW_NEEDED")
+    icon = {"VERIFIED": "✅", "REVIEW_NEEDED": "⚠️", "INSUFFICIENT": "🛑"}.get(status, "⚠️")
+    route = answer.get("route", {})
+    checks = []
+    if route.get("web_grounding"):
+        checks.append("web sources")
+    if route.get("code_execution"):
+        checks.append("independent calculation")
+    if route.get("uploaded_evidence"):
+        checks.append("uploaded notes")
+    check_text = ", ".join(checks) if checks else "independent reviewer"
+    return (
+        f"{icon} **{status}** · Confidence: **{answer.get('confidence', 0)}%** · "
+        f"Subject: **{answer.get('subject', 'General Studies')}** · Checks: {check_text} · "
+        f"Engine: **v{answer.get('engine_version', ENGINE_VERSION)}**"
+    )
+
+
+def quick_solver_ui(
+    question, history, language, subject_choice, allow_web, analysis,
+    request: gr.Request,
+):
+    try:
+        session_id = getattr(getattr(request, "client", None), "host", "anonymous")
+        safe_question = SECURITY_GUARD.check(question, session_id)
+        rag_context = _question_context(safe_question, analysis)
+        answer = solve_question(
+            safe_question,
+            language=language,
+            rag_context=rag_context,
+            force_web=bool(allow_web),
+            subject_override=subject_choice,
+        )
+        rendered = answer_markdown(answer)
+        updated = list(history or [])
+        updated.extend([
+            {"role": "user", "content": safe_question},
+            {"role": "assistant", "content": rendered},
+        ])
+        html_file, pdf_file = create_answer_artifacts(answer)
+        status = (
+            f"✅ Fresh visual pack created for this exact question. "
+            f"PDF is static/printable; HTML contains safe offline animation. "
+            f"Files are unique, so an older answer cannot be reused from cache."
+        )
+        return updated, "", _verification_panel(answer), pdf_file, html_file, status
     except Exception as error:
         return gr.skip(), gr.skip(), '❌ '+html.escape(str(error)),None,None,''
 
@@ -656,32 +698,28 @@ def ask_agent_ui(
     session_id = getattr(getattr(request, "client", None), "host", "anonymous")
     try:
         safe_request = SECURITY_GUARD.check(request_text, session_id)
-        intent, agent, plan = detect_intent(safe_request)
         result = current_state if isinstance(current_state, dict) else {}
-
-        header = (
-            "## 🤖 Agent Response\n\n"
-            f"**Detected Intent:** {intent}  \n"
-            f"**Selected Agent:** {agent}  \n"
-            "**Review Status:** Approved\n\n"
-            "### Execution Plan\n\n"
+        rag_context = _question_context(safe_request, result)
+        answer = solve_question(
+            safe_request,
+            language=language,
+            rag_context=rag_context,
         )
-        header += "\n".join(f"{number}. {step}" for number, step in enumerate(plan, 1))
-
-        chunks = result.get('chunks', [])
-        if not chunks:
-            return 'Please process your study material first.'
-        matches = semantic_search(safe_request, chunks, top_k=4)
-        generated = answer_from_source_evidence(safe_request, matches, language)
-        if not generated:
-            return 'Could not verify an answer in the selected language. Please retry or check Gemini access. Your notes are unchanged.'
-        return generated
-    except Exception as error:
+        html_file, pdf_file = create_answer_artifacts(answer)
         return (
+            answer_markdown(answer),
+            _verification_panel(answer),
+            pdf_file,
+            html_file,
+        )
+    except Exception as error:
+        blocked = (
             "## 🛡️ Request Blocked Safely\n\n"
             f"**Reason:** {html.escape(str(error))}\n\n"
             "**Security Plan:** Plan A"
         )
+        # Always clear old downloads when a new request fails.
+        return blocked, "", None, None
 
 
 def security_dashboard() -> str:
@@ -941,7 +979,7 @@ with gr.Blocks(title="Exam Saathi AI") as demo:
         <div class="exam-header">
           <h1>📘 EXAM SAATHI AI</h1>
           <h2>Secure Agentic AI Study Assistant</h2>
-          <p><strong>Version 4.1 — Source-Supported Geography Visuals</strong></p>
+          <p><strong>Version {ENGINE_VERSION} — Verified Multilingual Answer Engine</strong></p>
           <p>PDF/Image → OCR → Human Review → NLP → Embeddings → Smart Notes → Questions → Trends</p>
           {AUTH_CONTROL}
         </div>
@@ -981,7 +1019,7 @@ Exam Saathi विद्यार्थियों के study documents क�
                 elem_classes=["exam-card"],
             )
             quick_language = gr.Dropdown(
-                choices=LANGUAGES,value="Hinglish",label="Answer language",
+                choices=SUPPORTED_LANGUAGES,value="Hinglish",label="Answer language",
             )
             quick_subject = gr.Dropdown(
                 choices=["Auto","Mathematics","Physics","Chemistry","Biology","Geography","History","General Studies"],
@@ -1000,7 +1038,7 @@ Exam Saathi विद्यार्थियों के study documents क�
                 lines=3,
             )
             quick_web = gr.Checkbox(
-                label="Verify factual questions with cited online sources (slower)",value=False,
+                label="Force online source verification (current/unique facts use it automatically)",value=False,
             )
             with gr.Row():
                 quick_send = gr.Button("➤ Solve step by step",variant="primary")
@@ -1197,12 +1235,13 @@ Exam Saathi विद्यार्थियों के study documents क�
 
         with gr.Tab("🤖 Ask Exam Saathi"):
             gr.Markdown(
-                "## Ask the Supervisor Agent\n\nTry: `Give me smart notes`, `Create practice questions`, "
-                "`Show previous-paper trends`, or `How is DNA copied?`",
+                f"## Ask Exam Saathi · Verified Engine v{ENGINE_VERSION}\n\n"
+                "Ask any standalone question or first process your PDF/photo/text for source-grounded answers. "
+                "Hard STEM calculations are independently checked; current and exceptional facts are web-grounded.",
                 elem_classes=["exam-card"],
             )
             answer_language = gr.Dropdown(
-                choices=LANGUAGES,
+                choices=SUPPORTED_LANGUAGES,
                 value="Hinglish",
                 label="Answer language",
             )
@@ -1220,6 +1259,10 @@ Exam Saathi विद्यार्थियों के study documents क�
                 elem_classes=["primary-button"],
             )
             agent_output = gr.Markdown("Agent response will appear here.", elem_classes=["exam-card"])
+            agent_verification = gr.Markdown()
+            with gr.Row():
+                agent_pdf = gr.File(label="Download colorful PDF", interactive=False, elem_classes=["study-file"])
+                agent_html = gr.File(label="Download animated HTML", interactive=False, elem_classes=["study-file"])
 
         with gr.Tab('💬 Smart Study Chat'):
             gr.Markdown('Ask follow-up questions about your latest processed PDF, HTML, photos or pasted notes. For images, upload/process them in Secure Upload first. Web results are labelled separately from notes.')
@@ -1290,7 +1333,7 @@ Exam Saathi विद्यार्थियों के study documents क�
                 fn=reset_lesson_for_source,inputs=[current_analysis,detailed_lesson],outputs=lesson_reset_outputs)
     chat_transcribe.click(fn=transcribe_voice_ui,inputs=[chat_mic,chat_language],outputs=[chat_question,chat_voice_status])
     quick_outputs=[quick_chat,quick_question,quick_error,quick_pdf,quick_html,quick_visual_status]
-    quick_inputs=[quick_question,quick_chat,quick_language,quick_subject,quick_web]
+    quick_inputs=[quick_question,quick_chat,quick_language,quick_subject,quick_web,current_analysis]
     quick_send.click(fn=quick_solver_ui,inputs=quick_inputs,outputs=quick_outputs,show_progress='minimal')
     quick_question.submit(fn=quick_solver_ui,inputs=quick_inputs,outputs=quick_outputs,show_progress='minimal')
     quick_clear.click(fn=lambda:([], '', '',None,None,''),outputs=quick_outputs)
@@ -1385,7 +1428,13 @@ Exam Saathi विद्यार्थियों के study documents क�
     ask_button.click(
         fn=ask_agent_ui,
         inputs=[request_input, current_analysis, answer_language],
-        outputs=[agent_output],
+        outputs=[agent_output, agent_verification, agent_pdf, agent_html],
+        show_progress="minimal",
+    )
+    request_input.submit(
+        fn=ask_agent_ui,
+        inputs=[request_input, current_analysis, answer_language],
+        outputs=[agent_output, agent_verification, agent_pdf, agent_html],
         show_progress="minimal",
     )
     planner_button.click(

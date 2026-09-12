@@ -31,14 +31,17 @@ OCR_TIMEOUT_SECONDS = 60
 SCANNED_PDF_RENDER_SCALE = 1.15
 OCR_LANGUAGE = os.environ.get("OCR_LANGUAGE", "eng")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.1-flash-lite").strip()
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.8-flash").strip()
 GEMINI_FALLBACK_MODELS = os.environ.get(
     "GEMINI_FALLBACK_MODELS",
-    "gemini-3.5-flash",
+    "gemini-3.6-flash",
 ).split(",")
 GEMINI_REQUEST_TIMEOUT_MS = int(os.environ.get("GEMINI_REQUEST_TIMEOUT_MS", "75000"))
 GEMINI_MAX_OUTPUT_TOKENS = int(os.environ.get("GEMINI_MAX_OUTPUT_TOKENS", "12000"))
 GEMINI_FALLBACK_THRESHOLD = 60.0
+GEMINI_EMBEDDING_MODEL = os.environ.get(
+    "GEMINI_EMBEDDING_MODEL", "gemini-embedding-2"
+).strip()
 MAX_TEXT_CHARACTERS = 200_000
 CHUNK_WORD_SIZE = 120
 CHUNK_WORD_OVERLAP = 25
@@ -881,9 +884,8 @@ class EmbeddingProvider:
 
     def __init__(self) -> None:
         self.model: Any = None
-        self.failed = os.environ.get(
-            "EXAM_SAATHI_EMBEDDINGS", "enabled"
-        ).lower() in {"disabled", "off", "false", "0"}
+        self.mode = os.environ.get("EXAM_SAATHI_EMBEDDINGS", "local").lower()
+        self.failed = self.mode != "local"
 
     def get(self) -> Any:
         if self.model is None and not self.failed:
@@ -1239,15 +1241,60 @@ def semantic_search(query: str, chunks: list[dict[str, Any]], top_k: int = 3) ->
     if not chunks:
         return []
     texts = [chunk["text"] for chunk in chunks]
+    vectorizer = TfidfVectorizer(stop_words=STOP_WORDS, ngram_range=(1, 2))
+    matrix = vectorizer.fit_transform(texts + [query])
+    tfidf_scores = cosine_similarity(matrix[-1], matrix[:-1])[0]
     model = EMBEDDINGS.get()
     if model is not None:
         vectors = model.encode(texts, convert_to_numpy=True, normalize_embeddings=True, show_progress_bar=False)
         query_vector = model.encode([query], convert_to_numpy=True, normalize_embeddings=True)
         scores = cosine_similarity(query_vector, vectors)[0]
+    elif EMBEDDINGS.mode == "gemini" and GEMINI_API_KEY:
+        # Rerank only the strongest TF-IDF candidates. This keeps Render Free
+        # memory low while still providing multilingual semantic retrieval.
+        scores = tfidf_scores.copy()
+        candidate_count = min(len(texts), max(20, top_k * 6))
+        candidate_indices = tfidf_scores.argsort()[::-1][:candidate_count]
+        candidate_texts = [texts[int(index)] for index in candidate_indices]
+        try:
+            from google import genai
+            from google.genai import types
+
+            client = genai.Client(
+                api_key=GEMINI_API_KEY,
+                http_options=types.HttpOptions(timeout=30_000),
+            )
+            document_response = client.models.embed_content(
+                model=GEMINI_EMBEDDING_MODEL,
+                contents=candidate_texts,
+                config=types.EmbedContentConfig(
+                    task_type="RETRIEVAL_DOCUMENT",
+                    output_dimensionality=768,
+                ),
+            )
+            query_response = client.models.embed_content(
+                model=GEMINI_EMBEDDING_MODEL,
+                contents=query,
+                config=types.EmbedContentConfig(
+                    task_type="RETRIEVAL_QUERY",
+                    output_dimensionality=768,
+                ),
+            )
+            document_vectors = np.asarray(
+                [embedding.values for embedding in document_response.embeddings],
+                dtype=float,
+            )
+            query_vector = np.asarray(
+                [query_response.embeddings[0].values],
+                dtype=float,
+            )
+            semantic_scores = cosine_similarity(query_vector, document_vectors)[0]
+            for local_index, chunk_index in enumerate(candidate_indices):
+                scores[int(chunk_index)] = 0.25 * tfidf_scores[int(chunk_index)] + 0.75 * semantic_scores[local_index]
+        except Exception:
+            scores = tfidf_scores
     else:
-        vectorizer = TfidfVectorizer(stop_words=STOP_WORDS, ngram_range=(1, 2))
-        matrix = vectorizer.fit_transform(texts + [query])
-        scores = cosine_similarity(matrix[-1], matrix[:-1])[0]
+        scores = tfidf_scores
 
     results: list[dict[str, Any]] = []
     for rank, index in enumerate(scores.argsort()[::-1][:top_k], start=1):

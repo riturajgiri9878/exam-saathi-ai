@@ -31,7 +31,7 @@ from urllib.request import Request, urlopen
 import pymupdf
 
 
-ENGINE_VERSION = "4.3.1"
+ENGINE_VERSION = "4.4.0"
 ANSWER_PROVIDER = os.environ.get("ANSWER_PROVIDER", "auto").strip().lower()
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
 GROQ_REASONING_MODEL = os.environ.get(
@@ -50,6 +50,10 @@ GEMINI_FALLBACK_MODELS = [
     for item in os.environ.get("GEMINI_FALLBACK_MODELS", "gemini-3.6-flash").split(",")
     if item.strip()
 ]
+PERPLEXITY_API_URL = "https://api.perplexity.ai/chat/completions"
+PERPLEXITY_MODEL = os.environ.get("PERPLEXITY_MODEL", "sonar").strip()
+OPENAI_API_URL = "https://api.openai.com/v1/chat/completions"
+OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "").strip()
 ANSWER_TIMEOUT_SECONDS = int(os.environ.get("ANSWER_TIMEOUT_SECONDS", "75"))
 GROQ_TIMEOUT_SECONDS = max(30, int(os.environ.get("GROQ_TIMEOUT_SECONDS", "60")))
 MAX_QUESTION_CHARACTERS = int(os.environ.get("MAX_QUESTION_CHARACTERS", "12000"))
@@ -70,7 +74,13 @@ SUBJECT_PATTERNS: list[tuple[str, tuple[str, ...]]] = [
     ("Physics", ("force", "velocity", "acceleration", "charge", "electric", "magnetic", "oscillation", "time period", "momentum", "quantum", "physics", "भौतिक")),
     ("Chemistry", ("reaction", "compound", "molecule", "organic", "inorganic", "equilibrium", "molar", "acid", "base", "ozonolysis", "chemistry", "रसायन")),
     ("Biology", ("cell", "dna", "rna", "gene", "protein", "organism", "anatomy", "physiology", "biology", "जीवविज्ञान")),
-    ("Geography", ("country", "enclave", "exclave", "river", "mountain", "climate", "desert", "volcano", "geography", "भूगोल")),
+    ("Geography", (
+        "country", "enclave", "exclave", "river", "mountain", "climate", "desert",
+        "volcano", "earthquake", "monsoon", "rain shadow", "trade wind", "ocean current",
+        "latitude", "longitude", "population", "migration", "mineral", "industry",
+        "plate tectonic", "drainage", "soil", "map", "geography", "भूगोल", "मानसून",
+        "नदी", "पर्वत", "ज्वालामुखी", "जनसंख्या",
+    )),
     ("History", ("empire", "dynasty", "war", "revolution", "history", "इतिहास")),
     ("Civics / Current Affairs", ("prime minister", "president", "chief minister", "parliament", "constitution", "government", "current affairs", "प्रधानमंत्री", "राष्ट्रपति")),
     ("Computer Science", ("algorithm", "python", "code", "database", "vector", "embedding", "computer", "programming")),
@@ -82,6 +92,27 @@ WEB_RISK_TERMS = (
     "world's only", "only remaining", "first ever", "largest", "smallest",
     "prime minister", "president", "chief minister", "ceo", "winner", "2026",
     "वर्तमान", "आज", "अभी", "प्रधानमंत्री", "राष्ट्रपति", "सबसे बड़ा", "एकमात्र",
+)
+
+GEOGRAPHY_TYPE_PATTERNS: list[tuple[str, tuple[str, ...]]] = [
+    ("Political Geography", ("border", "boundary", "country", "capital", "enclave", "exclave", "territory", "sovereignty")),
+    ("Current Geography", ("flood", "cyclone", "earthquake today", "eruption", "disaster", "current geography", "latest")),
+    ("Human Geography", ("population", "migration", "urban", "settlement", "density", "demographic")),
+    ("Economic Geography", ("mineral", "industry", "agriculture", "trade", "resource", "transport")),
+    ("Indian Geography", ("india", "indian", "भारत", "गंगा", "हिमालय", "deccan", "western ghats")),
+    ("Map / Location", ("map", "locate", "latitude", "longitude", "coordinate", "where is")),
+    ("Physical Geography", ("volcano", "earthquake", "monsoon", "rain shadow", "climate", "desert", "river", "mountain", "plate", "ocean current")),
+]
+
+OFFICIAL_SOURCE_DOMAINS = (
+    ".gov.in", "pib.gov.in", "rbi.org.in", "isro.gov.in", "eci.gov.in",
+    "sci.gov.in", "ncert.nic.in", "cbse.gov.in", "censusindia.gov.in",
+    "imd.gov.in", "gsi.gov.in", "bhuvan.nrsc.gov.in", "un.org",
+    "worldbank.org", "nasa.gov", "usgs.gov",
+)
+TRUSTED_SOURCE_DOMAINS = (
+    "reuters.com", "apnews.com", "bbc.com", "britannica.com", "nature.com",
+    "science.org", "nationalgeographic.com",
 )
 
 CALCULATION_TERMS = (
@@ -98,6 +129,10 @@ class ToolRoute:
     use_code: bool
     use_rag: bool
     high_risk_fact: bool
+    geography_type: str = ""
+    visual_type: str = "concept"
+    source_policy: str = "standard"
+    freshness_required: bool = False
 
 
 def detect_subject(question: str) -> str:
@@ -110,11 +145,43 @@ def detect_subject(question: str) -> str:
     return best if scores[best] else "General Studies"
 
 
+def detect_geography_type(question: str) -> str:
+    lowered = question.casefold()
+    scores = {
+        geography_type: sum(1 for term in terms if term in lowered)
+        for geography_type, terms in GEOGRAPHY_TYPE_PATTERNS
+    }
+    best = max(scores, key=scores.get)
+    return best if scores[best] else "General Geography"
+
+
+def _geography_visual_type(question: str, geography_type: str) -> str:
+    lowered = question.casefold()
+    if "enclave" in lowered or "exclave" in lowered:
+        return "nested"
+    if any(term in lowered for term in ("volcano", "rain shadow", "thermal inversion", "mountain")):
+        return "cross_section"
+    if any(term in lowered for term in ("monsoon", "trade wind", "ocean current", "wind")):
+        return "wind_map"
+    if any(term in lowered for term in ("river", "drainage", "tributary")):
+        return "drainage"
+    if any(term in lowered for term in ("population", "density", "distribution")):
+        return "choropleth"
+    if any(term in lowered for term in ("plate", "earthquake")):
+        return "plates"
+    if geography_type in {"Political Geography", "Map / Location", "Indian Geography"}:
+        return "map"
+    return "flow"
+
+
 def choose_tools(question: str, rag_context: list[dict[str, Any]] | None = None) -> ToolRoute:
     lowered = question.casefold()
     subject = detect_subject(question)
     has_rag = bool(rag_context)
-    high_risk_fact = any(term in lowered for term in WEB_RISK_TERMS)
+    current_year = int(time.strftime("%Y", time.gmtime()))
+    mentioned_years = [int(value) for value in re.findall(r"\b20\d{2}\b", lowered)]
+    recent_year = any(year >= current_year - 1 for year in mentioned_years)
+    high_risk_fact = any(term in lowered for term in WEB_RISK_TERMS) or recent_year
     # Static textbook/general-knowledge questions do not need a slow live web
     # tool call. Current, unique, superlative and office-holder claims still do.
     use_web = high_risk_fact
@@ -122,12 +189,30 @@ def choose_tools(question: str, rag_context: list[dict[str, Any]] | None = None)
     use_code = use_code or bool(re.search(r"[=+\-*/^]|\\frac|\\sqrt|\d", question)) and subject in {
         "Mathematics", "Physics", "Chemistry", "Computer Science"
     }
+    geography_type = detect_geography_type(question) if subject == "Geography" else ""
+    visual_type = _geography_visual_type(question, geography_type) if geography_type else "concept"
+    government_fact = any(term in lowered for term in (
+        "government", "prime minister", "president", "chief minister", "repo rate",
+        "scheme", "minister", "सरकार", "प्रधानमंत्री", "राष्ट्रपति", "मुख्यमंत्री",
+    ))
+    source_policy = "official_government" if government_fact and high_risk_fact else (
+        "authoritative_geography" if geography_type and high_risk_fact else (
+            "multi_source" if high_risk_fact else "standard"
+        )
+    )
     return ToolRoute(
         subject=subject,
         use_web=use_web,
         use_code=use_code,
         use_rag=has_rag,
         high_risk_fact=high_risk_fact,
+        geography_type=geography_type,
+        visual_type=visual_type,
+        source_policy=source_policy,
+        freshness_required=recent_year or any(term in lowered for term in (
+            "current", "currently", "latest", "today", "now", "present", "recent",
+            "वर्तमान", "आज", "अभी",
+        )),
     )
 
 
@@ -176,15 +261,26 @@ Return ONLY one valid JSON object with these keys:
   "steps": [{"heading": "Step 1", "body": "complete reasoning with readable equations"}],
   "worked_example": "worked example/application, or Not applicable",
   "key_facts": ["fact"],
+  "why_it_matters": "why this matters for the student or exam",
+  "exam_perspective": "how the topic is commonly tested",
   "common_mistakes": ["mistake and correction"],
   "final_answer": "concise exam-ready answer",
   "short_questions": ["2 to 4 useful short practice questions"],
   "long_questions": ["1 to 3 important long-answer questions"],
+  "mcqs": [{"question": "question", "options": ["A", "B", "C", "D"], "answer": "correct option with reason"}],
+  "geography": {
+    "type": "Physical|Political|Human|Economic|Indian|Map|Current|Not applicable",
+    "important_locations": ["location and why it matters"],
+    "data_year": "year for population/climate/current data, or Not applicable",
+    "boundary_note": "neutral note for disputed or changing boundaries, or Not applicable",
+    "map_note": "Verified map data used, or Schematic/not to scale"
+  },
   "diagram": {
-    "kind": "nested|flow|force|reaction|cycle|timeline|equation|concept",
+    "kind": "nested|flow|force|reaction|cycle|timeline|equation|concept|cross_section|wind_map|drainage|choropleth|plates|map",
     "title": "diagram title",
     "nodes": ["short accurate label"],
-    "edges": ["short relationship label"]
+    "edges": ["short relationship label"],
+    "accuracy_note": "Schematic/not to scale unless verified coordinates or geometry were actually used"
   },
   "verification_status": "VERIFIED|REVIEW_NEEDED|INSUFFICIENT",
   "confidence": 0,
@@ -207,6 +303,10 @@ QUESTION:
 
 REQUESTED ANSWER LANGUAGE: {language}
 DETECTED SUBJECT: {route.subject}
+GEOGRAPHY TYPE: {route.geography_type or 'Not applicable'}
+RECOMMENDED VISUAL: {route.visual_type}
+SOURCE POLICY: {route.source_policy}
+FRESHNESS REQUIRED: {route.freshness_required}
 CURRENT DATE (UTC): {time.strftime('%Y-%m-%d', time.gmtime())}
 UPLOADED EVIDENCE:
 {rag_text}
@@ -227,6 +327,14 @@ Non-negotiable rules:
 9. The diagram labels must be specific to this exact question, never generic labels such as
    Core idea, Mechanism or Application.
 10. Confidence is not proof. Set VERIFIED only when the requested checks actually succeeded.
+11. For Geography, identify the exact geography type. Include named locations, controlling
+    physical/human processes, scale and data year. Use a cross-section, wind map, drainage,
+    choropleth, plate or nesting visual when appropriate.
+12. Never invent a political boundary or pretend a schematic SVG is a surveyed map. If exact
+    verified coordinates/geometry were not supplied by a source, label the visual Schematic / not
+    to scale. Treat disputed boundaries neutrally.
+13. For current affairs, include why it matters, exam perspective, the verification date and
+    source-supported facts. Do not answer a current fact from model memory alone.
 
 {_payload_schema_instruction()}"""
 
@@ -246,6 +354,8 @@ ORIGINAL QUESTION:
 
 REQUESTED LANGUAGE: {language}
 SUBJECT: {route.subject}
+GEOGRAPHY TYPE: {route.geography_type or 'Not applicable'}
+SOURCE POLICY: {route.source_policy}
 UPLOADED EVIDENCE:
 {rag_text}
 
@@ -265,6 +375,9 @@ Audit requirements:
 - Return a corrected, complete teaching payload, not just a list of criticisms.
 - Preserve exact uploaded filename/page citations when they truly support a claim.
 - Produce a question-specific diagram specification.
+- For Geography, reject invented borders, locations, directions and data years. Check the visual
+  type and require Schematic / not to scale unless source-backed geometry was actually used.
+- For current affairs, ensure every changing claim is tied to a source and date.
 
 {_payload_schema_instruction()}"""
 
@@ -476,22 +589,145 @@ def _gemini_generate(prompt: str, use_web: bool, use_code: bool) -> tuple[str, l
     raise RuntimeError("Gemini unavailable. " + " | ".join(errors))
 
 
+def _perplexity_sources(response: dict[str, Any]) -> list[dict[str, str]]:
+    sources: list[dict[str, str]] = []
+    search_results = response.get("search_results", [])
+    if isinstance(search_results, list):
+        for item in search_results:
+            if not isinstance(item, dict):
+                continue
+            uri = str(item.get("url") or item.get("uri") or "").strip()
+            title = str(item.get("title") or uri).strip()
+            if uri and urlparse(uri).scheme in {"http", "https"}:
+                sources.append({"title": title or uri, "uri": uri})
+    citations = response.get("citations", [])
+    if isinstance(citations, list):
+        for citation in citations:
+            if isinstance(citation, str):
+                uri, title = citation.strip(), citation.strip()
+            elif isinstance(citation, dict):
+                uri = str(citation.get("url") or citation.get("uri") or "").strip()
+                title = str(citation.get("title") or uri).strip()
+            else:
+                continue
+            if uri and urlparse(uri).scheme in {"http", "https"}:
+                sources.append({"title": title or uri, "uri": uri})
+    return _dedupe_sources(sources)
+
+
+def _perplexity_generate(prompt: str, use_web: bool, use_code: bool) -> tuple[str, list[dict[str, str]], bool, str]:
+    """Ground current/GK/geography claims with Perplexity Sonar when configured."""
+    api_key = os.environ.get("PERPLEXITY_API_KEY", "").strip()
+    if not api_key:
+        raise RuntimeError("PERPLEXITY_API_KEY is not configured.")
+    payload = {
+        "model": PERPLEXITY_MODEL,
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0.1,
+        "max_tokens": 6500,
+    }
+    request = Request(
+        PERPLEXITY_API_URL,
+        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+            "User-Agent": f"Exam-Saathi/{ENGINE_VERSION}",
+        },
+        method="POST",
+    )
+    try:
+        with urlopen(request, timeout=ANSWER_TIMEOUT_SECONDS) as response:
+            value = json.loads(response.read().decode("utf-8"))
+        content = str(value["choices"][0]["message"].get("content", "")).strip()
+        if not content:
+            raise RuntimeError("empty model response")
+        return content, _perplexity_sources(value), False, f"perplexity:{PERPLEXITY_MODEL}"
+    except Exception as error:
+        raise RuntimeError("Perplexity unavailable: " + _provider_error_text(error)) from error
+
+
+def _openai_generate(prompt: str, use_web: bool, use_code: bool) -> tuple[str, list[dict[str, str]], bool, str]:
+    """Use the OpenAI API as an optional reasoning fallback, never ChatGPT cookies/login."""
+    api_key = os.environ.get("OPENAI_API_KEY", "").strip()
+    model = os.environ.get("OPENAI_MODEL", OPENAI_MODEL).strip()
+    if not api_key:
+        raise RuntimeError("OPENAI_API_KEY is not configured.")
+    if not model:
+        raise RuntimeError("OPENAI_MODEL is not configured.")
+    payload = {
+        "model": model,
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0.1,
+        "max_completion_tokens": 6500,
+        "response_format": {"type": "json_object"},
+    }
+    request = Request(
+        OPENAI_API_URL,
+        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+            "User-Agent": f"Exam-Saathi/{ENGINE_VERSION}",
+        },
+        method="POST",
+    )
+    try:
+        with urlopen(request, timeout=ANSWER_TIMEOUT_SECONDS) as response:
+            value = json.loads(response.read().decode("utf-8"))
+        content = str(value["choices"][0]["message"].get("content", "")).strip()
+        if not content:
+            raise RuntimeError("empty model response")
+        # This endpoint is used as a reasoning fallback. Current claims still
+        # remain REVIEW_NEEDED unless another web-grounded provider supplied URLs.
+        return content, [], False, f"openai:{model}"
+    except Exception as error:
+        raise RuntimeError("OpenAI unavailable: " + _provider_error_text(error)) from error
+
+
 def _default_generate(prompt: str, use_web: bool, use_code: bool) -> tuple[str, list[dict[str, str]], bool, str]:
-    """Use Groq first, then Gemini, without exposing secret-bearing raw errors."""
-    provider = ANSWER_PROVIDER if ANSWER_PROVIDER in {"auto", "groq", "gemini"} else "auto"
+    """Route across optional providers without exposing secret-bearing raw errors."""
+    allowed = {"auto", "groq", "gemini", "perplexity", "openai"}
+    provider = ANSWER_PROVIDER if ANSWER_PROVIDER in allowed else "auto"
     attempts: list[tuple[str, Callable[..., tuple[str, list[dict[str, str]], bool, str]]]] = []
-    if provider in {"auto", "groq"}:
-        attempts.append(("Groq", _groq_generate))
-    if provider in {"auto", "gemini"}:
-        attempts.append(("Gemini", _gemini_generate))
+    if provider == "auto":
+        if use_web:
+            attempts.extend([
+                ("Perplexity", _perplexity_generate),
+                ("Groq", _groq_generate),
+                ("Gemini", _gemini_generate),
+                ("OpenAI", _openai_generate),
+            ])
+        elif use_code:
+            attempts.extend([
+                ("Groq", _groq_generate),
+                ("Gemini", _gemini_generate),
+                ("OpenAI", _openai_generate),
+            ])
+        else:
+            attempts.extend([
+                ("Groq", _groq_generate),
+                ("OpenAI", _openai_generate),
+                ("Gemini", _gemini_generate),
+            ])
+    else:
+        attempts.append({
+            "groq": ("Groq", _groq_generate),
+            "gemini": ("Gemini", _gemini_generate),
+            "perplexity": ("Perplexity", _perplexity_generate),
+            "openai": ("OpenAI", _openai_generate),
+        }[provider])
 
     errors: list[str] = []
     for name, generate in attempts:
-        if name == "Groq" and not os.environ.get("GROQ_API_KEY", "").strip():
-            errors.append("Groq: GROQ_API_KEY not configured")
-            continue
-        if name == "Gemini" and not os.environ.get("GEMINI_API_KEY", "").strip():
-            errors.append("Gemini: GEMINI_API_KEY not configured")
+        key_name = {
+            "Groq": "GROQ_API_KEY",
+            "Gemini": "GEMINI_API_KEY",
+            "Perplexity": "PERPLEXITY_API_KEY",
+            "OpenAI": "OPENAI_API_KEY",
+        }[name]
+        if not os.environ.get(key_name, "").strip():
+            errors.append(f"{name}: {key_name} not configured")
             continue
         try:
             return generate(prompt, use_web, use_code)
@@ -527,10 +763,32 @@ def _normalise_payload(payload: dict[str, Any], subject: str, language: str) -> 
 
     diagram = payload.get("diagram", {}) if isinstance(payload.get("diagram"), dict) else {}
     kind = str(diagram.get("kind", "concept")).lower()
-    if kind not in {"nested", "flow", "force", "reaction", "cycle", "timeline", "equation", "concept"}:
+    if kind not in {
+        "nested", "flow", "force", "reaction", "cycle", "timeline", "equation",
+        "concept", "cross_section", "wind_map", "drainage", "choropleth", "plates", "map",
+    }:
         kind = "concept"
     nodes = [str(item).strip()[:90] for item in diagram.get("nodes", []) if str(item).strip()][:7]
     edges = [str(item).strip()[:55] for item in diagram.get("edges", []) if str(item).strip()][:7]
+
+    geography = payload.get("geography", {}) if isinstance(payload.get("geography"), dict) else {}
+    important_locations = geography.get("important_locations", [])
+    if not isinstance(important_locations, list):
+        important_locations = []
+    mcqs: list[dict[str, Any]] = []
+    for item in payload.get("mcqs", []) if isinstance(payload.get("mcqs"), list) else []:
+        if not isinstance(item, dict):
+            continue
+        mcq_question = str(item.get("question", "")).strip()
+        options = item.get("options", [])
+        if not isinstance(options, list):
+            options = []
+        if mcq_question:
+            mcqs.append({
+                "question": mcq_question,
+                "options": [str(option).strip() for option in options if str(option).strip()][:4],
+                "answer": str(item.get("answer", "")).strip(),
+            })
 
     return {
         "title": text_value("title", "Exam Saathi Answer"),
@@ -541,15 +799,28 @@ def _normalise_payload(payload: dict[str, Any], subject: str, language: str) -> 
         "steps": steps,
         "worked_example": text_value("worked_example", "Not applicable."),
         "key_facts": string_list("key_facts"),
+        "why_it_matters": text_value("why_it_matters", "This topic supports concept clarity and exam revision."),
+        "exam_perspective": text_value("exam_perspective", "Revise the direct answer, evidence and common mistakes."),
         "common_mistakes": string_list("common_mistakes"),
         "final_answer": text_value("final_answer", "The answer needs human review."),
         "short_questions": string_list("short_questions")[:4],
         "long_questions": string_list("long_questions")[:3],
+        "mcqs": mcqs[:3],
+        "geography": {
+            "type": str(geography.get("type", "Not applicable")).strip() or "Not applicable",
+            "important_locations": [
+                str(item).strip() for item in important_locations if str(item).strip()
+            ][:8],
+            "data_year": str(geography.get("data_year", "Not applicable")).strip() or "Not applicable",
+            "boundary_note": str(geography.get("boundary_note", "Not applicable")).strip() or "Not applicable",
+            "map_note": str(geography.get("map_note", "Schematic / not to scale")).strip() or "Schematic / not to scale",
+        },
         "diagram": {
             "kind": kind,
             "title": str(diagram.get("title", "Concept diagram")).strip()[:120],
             "nodes": nodes or [subject, "Evidence", "Verified answer"],
             "edges": edges,
+            "accuracy_note": str(diagram.get("accuracy_note", "Schematic / not to scale")).strip()[:180],
         },
         "verification_status": str(payload.get("verification_status", "REVIEW_NEEDED")).upper(),
         "confidence": max(0, min(100, int(float(payload.get("confidence", 0) or 0)))),
@@ -566,45 +837,100 @@ def _offline_stable_fact_answer(
     must never be guessed from an offline cache.
     """
     lowered = question.casefold()
-    if "india" not in lowered and "भारत" not in lowered:
-        return None
-    if "national bird" not in lowered and "राष्ट्रीय पक्षी" not in lowered:
+    facts = [
+        {
+            "match": lambda text: ("india" in text or "भारत" in text) and (
+                "national bird" in text or "राष्ट्रीय पक्षी" in text
+            ),
+            "title": "India's National Bird",
+            "direct_en": "India's national bird is the Indian peacock (scientific name: Pavo cristatus).",
+            "direct_hi": "भारत का राष्ट्रीय पक्षी भारतीय मोर (Indian peacock; वैज्ञानिक नाम: Pavo cristatus) है।",
+            "final_en": "Final answer: Indian peacock (Pavo cristatus).",
+            "final_hi": "अंतिम उत्तर: भारतीय मोर (Indian peacock / Pavo cristatus)।",
+            "facts": ["Common exam name: Indian peacock.", "Scientific name: Pavo cristatus.", "Declared India's national bird in 1963."],
+            "nodes": ["India", "National bird", "Indian peacock", "Pavo cristatus"],
+            "source_title": "National Portal of India - National Bird",
+            "source_uri": "https://knowindia.india.gov.in/national-identity-elements/national-bird.php",
+        },
+        {
+            "match": lambda text: ("india" in text or "भारत" in text) and (
+                "capital" in text or "राजधानी" in text
+            ),
+            "title": "Capital of India",
+            "direct_en": "The capital of India is New Delhi.",
+            "direct_hi": "भारत की राजधानी नई दिल्ली (New Delhi) है।",
+            "final_en": "Final answer: New Delhi.",
+            "final_hi": "अंतिम उत्तर: नई दिल्ली।",
+            "facts": ["Country: India.", "National capital: New Delhi."],
+            "nodes": ["India", "National capital", "New Delhi"],
+            "source_title": "National Portal of India - India at a Glance",
+            "source_uri": "https://knowindia.india.gov.in/profile/india-at-a-glance.php",
+        },
+        {
+            "match": lambda text: ("constitution" in text or "संविधान" in text) and (
+                "india" in text or "भारत" in text or "came into force" in text or "लागू" in text
+            ),
+            "title": "Constitution of India",
+            "direct_en": "The Constitution of India came into force on 26 January 1950.",
+            "direct_hi": "भारत का संविधान 26 जनवरी 1950 को लागू हुआ।",
+            "final_en": "Final answer: 26 January 1950.",
+            "final_hi": "अंतिम उत्तर: 26 जनवरी 1950।",
+            "facts": ["Adopted: 26 November 1949.", "Came into force: 26 January 1950."],
+            "nodes": ["Constitution adopted", "26 November 1949", "Came into force", "26 January 1950"],
+            "source_title": "Legislative Department - Constitution of India",
+            "source_uri": "https://legislative.gov.in/constitution-of-india/",
+        },
+        {
+            "match": lambda text: ("largest ocean" in text or "सबसे बड़ा महासागर" in text),
+            "title": "World's Largest Ocean",
+            "direct_en": "The Pacific Ocean is the world's largest ocean.",
+            "direct_hi": "प्रशांत महासागर (Pacific Ocean) दुनिया का सबसे बड़ा महासागर है।",
+            "final_en": "Final answer: Pacific Ocean.",
+            "final_hi": "अंतिम उत्तर: प्रशांत महासागर।",
+            "facts": ["The Pacific is the largest and deepest ocean basin."],
+            "nodes": ["World oceans", "Largest ocean", "Pacific Ocean"],
+            "source_title": "NOAA Ocean Service - How big is the Pacific Ocean?",
+            "source_uri": "https://oceanservice.noaa.gov/facts/pacific.html",
+        },
+    ]
+    fact = next((item for item in facts if item["match"](lowered)), None)
+    if fact is None:
         return None
 
-    if language in {"Hindi", "Hinglish"}:
-        direct = "भारत का राष्ट्रीय पक्षी भारतीय मोर (Indian peacock; वैज्ञानिक नाम: Pavo cristatus) है।"
-        beginner = "मोर को भारत की पहचान, सुंदरता और सांस्कृतिक विरासत से जुड़े प्रतीक के रूप में याद रखें।"
-        final = "अंतिम उत्तर: भारतीय मोर (Indian peacock / Pavo cristatus)।"
-    else:
-        direct = "India's national bird is the Indian peacock (scientific name: Pavo cristatus)."
-        beginner = "Remember the peacock as a national symbol connected with India's cultural heritage and biodiversity."
-        final = "Final answer: Indian peacock (Pavo cristatus)."
+    hindi_mode = language in {"Hindi", "Hinglish"}
+    direct = str(fact["direct_hi"] if hindi_mode else fact["direct_en"])
+    beginner = (
+        "इसे country/topic → official fact → exam-ready name की छोटी chain की तरह याद रखें।"
+        if hindi_mode else
+        "Remember it as a short chain: country/topic → official fact → exam-ready name."
+    )
+    final = str(fact["final_hi"] if hindi_mode else fact["final_en"])
 
     answer = _normalise_payload({
-        "title": "India's National Bird",
+        "title": fact["title"],
         "subject": subject,
         "direct_answer": direct,
         "beginner_explanation": beginner,
         "steps": [
-            {"heading": "Identify the country", "body": "The question asks for the national bird of India."},
-            {"heading": "Recall the official symbol", "body": "The Indian peacock was declared India's national bird in 1963."},
-            {"heading": "Write the exam-ready name", "body": "Write Indian peacock; Pavo cristatus may be added as the scientific name."},
+            {"heading": "Identify the exact fact", "body": "Separate the entity being asked about from related facts."},
+            {"heading": "Use the curated reference", "body": direct},
+            {"heading": "Write the exam-ready answer", "body": final},
         ],
-        "worked_example": "Question: What is the national bird of India? Answer: Indian peacock.",
-        "key_facts": [
-            "Common exam name: Indian peacock.",
-            "Scientific name: Pavo cristatus.",
-            "It was declared the national bird of India in 1963.",
-        ],
-        "common_mistakes": ["Do not write only 'bird' or confuse it with the national animal, the tiger."],
+        "worked_example": f"Question: {question} Answer: {final}",
+        "key_facts": fact["facts"],
+        "why_it_matters": "This is a frequently tested stable general-knowledge fact.",
+        "exam_perspective": "Write the exact name/date requested; do not replace it with a related fact.",
+        "common_mistakes": ["Do not confuse a related national, geographic or historical fact with the exact fact asked."],
         "final_answer": final,
-        "short_questions": ["What is the scientific name of the Indian peacock?"],
-        "long_questions": ["Explain why national symbols are important for a country."],
+        "short_questions": [f"State one related fact about {fact['title']}."],
+        "long_questions": [f"Explain {fact['title']} with its relevant context."],
+        "mcqs": [],
         "diagram": {
             "kind": "flow",
-            "title": "India and its national bird",
-            "nodes": ["India", "National bird", "Indian peacock", "Pavo cristatus"],
-            "edges": ["has", "official symbol", "scientific name"],
+            "title": fact["title"],
+            "nodes": fact["nodes"],
+            "edges": ["asks", "verified as", "exam detail"],
+            "accuracy_note": "Curated stable-fact diagram.",
         },
         "verification_status": "VERIFIED",
         "confidence": 99,
@@ -614,13 +940,15 @@ def _offline_stable_fact_answer(
         ],
     }, subject, language)
     sources = [{
-        "title": "National Portal of India - National Bird",
-        "uri": "https://knowindia.india.gov.in/national-identity-elements/national-bird.php",
+        "title": fact["source_title"],
+        "uri": fact["source_uri"],
     }]
     return answer, sources
 
 
-def _enforce_specific_diagram(question: str, payload: dict[str, Any]) -> None:
+def _enforce_specific_diagram(
+    question: str, payload: dict[str, Any], route: ToolRoute | None = None
+) -> None:
     lowered = question.casefold()
     diagram = payload["diagram"]
     generic = {"core idea", "mechanism", "application", "evidence", "verified answer"}
@@ -631,11 +959,105 @@ def _enforce_specific_diagram(question: str, payload: dict[str, Any]) -> None:
             "title": "Territory inside an enclave inside another country",
             "nodes": ["Outer territory", "Enclave / exclave", "Counter-enclave"],
             "edges": ["surrounds", "contains"],
+            "accuracy_note": "Schematic nesting diagram; not a surveyed political map.",
+        })
+    elif "volcano" in lowered and (diagram.get("kind") in {"concept", "flow"} or node_words & generic):
+        diagram.update({
+            "kind": "cross_section",
+            "title": "Volcano cross-section and eruption pathway",
+            "nodes": ["Magma chamber", "Main vent", "Crater", "Lava flow", "Ash cloud"],
+            "edges": ["pressure rises", "magma ascends", "eruption", "surface flow"],
+            "accuracy_note": "Educational cross-section; schematic and not to scale.",
+        })
+    elif "rain shadow" in lowered and (diagram.get("kind") in {"concept", "flow"} or node_words & generic):
+        diagram.update({
+            "kind": "cross_section",
+            "title": "Orographic uplift and rain-shadow formation",
+            "nodes": ["Moist wind", "Windward uplift", "Cooling and rain", "Mountain crest", "Dry leeward air"],
+            "edges": ["rises", "cools", "loses moisture", "descends and warms"],
+            "accuracy_note": "Process cross-section; schematic and not to scale.",
+        })
+    elif any(term in lowered for term in ("monsoon", "trade wind", "ocean current")) and (
+        diagram.get("kind") in {"concept", "flow"} or node_words & generic
+    ):
+        diagram.update({
+            "kind": "wind_map",
+            "title": "Atmospheric and ocean-flow pathway",
+            "nodes": ["Source region", "Pressure gradient", "Wind/current direction", "Land interaction", "Weather outcome"],
+            "edges": ["drives", "moves", "reaches", "produces"],
+            "accuracy_note": "Directional process map; schematic and not to scale.",
+        })
+    elif any(term in lowered for term in ("river", "drainage", "tributary")) and (
+        diagram.get("kind") in {"concept", "flow"} or node_words & generic
+    ):
+        diagram.update({
+            "kind": "drainage",
+            "title": "River-basin drainage relationship",
+            "nodes": ["Source", "Upper course", "Tributary", "Main channel", "Mouth / basin outlet"],
+            "edges": ["flows", "joins", "carries water", "reaches"],
+            "accuracy_note": "Drainage concept sketch; schematic and not to scale.",
+        })
+    elif any(term in lowered for term in ("plate", "earthquake")) and (
+        diagram.get("kind") in {"concept", "flow"} or node_words & generic
+    ):
+        diagram.update({
+            "kind": "plates",
+            "title": "Plate boundary and crustal movement",
+            "nodes": ["Plate A", "Boundary", "Plate B", "Stress release", "Surface effect"],
+            "edges": ["moves", "interacts", "stores stress", "causes"],
+            "accuracy_note": "Tectonic process cross-section; schematic and not to scale.",
         })
     elif any(term in lowered for term in ("reaction", "compound", "ozonolysis")) and diagram.get("kind") == "concept":
         diagram["kind"] = "reaction"
     elif any(term in lowered for term in ("force", "electric field", "magnetic field")) and diagram.get("kind") == "concept":
         diagram["kind"] = "force"
+
+    if route and route.subject == "Geography":
+        if diagram.get("kind") == "concept":
+            diagram["kind"] = route.visual_type
+        diagram.setdefault("accuracy_note", "Schematic / not to scale.")
+        geography = payload.setdefault("geography", {})
+        if geography.get("type") in {"", "Not applicable", None}:
+            geography["type"] = route.geography_type or "General Geography"
+        # v4.4 draws offline educational SVGs, not surveyed boundary geometry.
+        # Never let model wording turn a schematic into a claimed exact map.
+        geography["map_note"] = "Educational schematic / not to scale; use the cited map source for exact boundaries."
+        diagram["accuracy_note"] = diagram.get("accuracy_note") or "Schematic / not to scale."
+
+
+def _source_domain(uri: str) -> str:
+    try:
+        return (urlparse(uri).hostname or "").casefold().removeprefix("www.")
+    except ValueError:
+        return ""
+
+
+def _source_tier(uri: str) -> tuple[int, str]:
+    domain = _source_domain(uri)
+    if not domain:
+        return 0, "Uploaded evidence"
+    if domain.endswith(".gov") or any(
+        domain == item.lstrip(".") or domain.endswith(item if item.startswith(".") else "." + item)
+        for item in OFFICIAL_SOURCE_DOMAINS
+    ):
+        return 1, "Official / primary"
+    if domain.endswith(".edu") or domain.endswith(".ac.in") or domain.endswith(".edu.in"):
+        return 1, "Academic / primary"
+    if any(domain == item or domain.endswith("." + item) for item in TRUSTED_SOURCE_DOMAINS):
+        return 2, "Trusted reference / news"
+    return 3, "Other web source"
+
+
+def _annotate_sources(items: list[dict[str, str]]) -> list[dict[str, str]]:
+    output: list[dict[str, str]] = []
+    for item in items:
+        enriched = dict(item)
+        tier, source_type = _source_tier(str(item.get("uri", "")))
+        enriched["domain"] = _source_domain(str(item.get("uri", "")))
+        enriched["source_tier"] = str(tier)
+        enriched["source_type"] = source_type
+        output.append(enriched)
+    return output
 
 
 def _apply_verification_gate(
@@ -648,12 +1070,25 @@ def _apply_verification_gate(
     if status not in {"VERIFIED", "REVIEW_NEEDED", "INSUFFICIENT"}:
         status = "REVIEW_NEEDED"
     notes = payload["verification_notes"]
-    if route.use_web and len(web_sources) < 1:
+    actual_web_sources = [item for item in web_sources if item.get("uri")]
+    distinct_domains = {item.get("domain") or _source_domain(item.get("uri", "")) for item in actual_web_sources}
+    distinct_domains.discard("")
+    source_tiers = {
+        int(str(item.get("source_tier", _source_tier(item.get("uri", ""))[0])))
+        for item in actual_web_sources
+    }
+    if route.use_web and len(actual_web_sources) < 1:
         status = "REVIEW_NEEDED"
         notes.append("Web verification was required but no grounded web source was returned.")
-    if route.high_risk_fact and len(web_sources) < 2:
+    if route.high_risk_fact and len(distinct_domains) < 2:
         status = "REVIEW_NEEDED"
-        notes.append("An exceptional/current claim requires at least two grounded sources.")
+        notes.append("An exceptional/current claim requires at least two independent source domains.")
+    if route.source_policy == "official_government" and 1 not in source_tiers:
+        status = "REVIEW_NEEDED"
+        notes.append("A current government claim needs at least one official or primary source.")
+    if route.source_policy == "authoritative_geography" and not ({1, 2} & source_tiers):
+        status = "REVIEW_NEEDED"
+        notes.append("Current/political geography needs an authoritative geography, government or trusted reference source.")
     if route.use_code and not used_code:
         status = "REVIEW_NEEDED"
         notes.append("Independent code execution was requested but no execution result was returned.")
@@ -689,6 +1124,11 @@ def solve_question(
     route = choose_tools(question, rag_context)
     if subject_override and subject_override != "Auto":
         route.subject = str(subject_override)
+        if route.subject == "Geography":
+            route.geography_type = detect_geography_type(question)
+            route.visual_type = _geography_visual_type(question, route.geography_type)
+            if route.high_risk_fact:
+                route.source_policy = "authoritative_geography"
     if force_web:
         route.use_web = True
     rag_text, rag_sources = _rag_block(rag_context)
@@ -706,16 +1146,20 @@ def solve_question(
         if offline is None:
             raise
         answer, offline_sources = offline
-        _enforce_specific_diagram(question, answer)
+        _enforce_specific_diagram(question, answer, route)
         answer.update({
             "question": question,
-            "sources": offline_sources,
+            "sources": _annotate_sources(offline_sources),
             "route": {
                 "subject": route.subject,
                 "web_grounding": False,
                 "code_execution": False,
                 "uploaded_evidence": False,
                 "high_risk_fact": False,
+                "geography_type": route.geography_type,
+                "visual_type": route.visual_type,
+                "source_policy": route.source_policy,
+                "freshness_required": route.freshness_required,
             },
             "models": ["offline:curated-stable-facts"],
             "engine_version": ENGINE_VERSION,
@@ -744,8 +1188,8 @@ def solve_question(
             + _provider_error_text(review_error)
             + ". The draft is shown instead of being discarded."
         )
-    _enforce_specific_diagram(question, answer)
-    sources = _dedupe_sources([*rag_sources, *draft_sources, *review_sources])
+    _enforce_specific_diagram(question, answer, route)
+    sources = _annotate_sources(_dedupe_sources([*rag_sources, *draft_sources, *review_sources]))
     _apply_verification_gate(answer, route, sources, draft_code or review_code)
     answer.update({
         "question": question,
@@ -756,6 +1200,10 @@ def solve_question(
             "code_execution": route.use_code,
             "uploaded_evidence": route.use_rag,
             "high_risk_fact": route.high_risk_fact,
+            "geography_type": route.geography_type,
+            "visual_type": route.visual_type,
+            "source_policy": route.source_policy,
+            "freshness_required": route.freshness_required,
         },
         "models": [draft_model, review_model],
         "engine_version": ENGINE_VERSION,
@@ -772,7 +1220,7 @@ def answer_markdown(answer: dict[str, Any]) -> str:
         "",
         f"**{status_icons.get(status, '⚠️')} Verification:** `{status}` · "
         f"**Confidence:** `{answer.get('confidence', 0)}%` · **Subject:** {answer.get('subject', '')}",
-        f"**Checked at:** {answer.get('checked_at', 'Current request')}",
+        f"**Verified/checked on:** {answer.get('checked_at', 'Current request')}",
         "",
         "## Original Question",
         "",
@@ -794,18 +1242,41 @@ def answer_markdown(answer: dict[str, Any]) -> str:
     lines += ["## 4. Worked Example / Application", "", answer.get("worked_example", ""), ""]
     lines += ["## 5. Key Facts", ""]
     lines += [f"- {item}" for item in answer.get("key_facts", [])] or ["- No separate key facts."]
-    lines += ["", "## 6. Common Mistakes", ""]
+    lines += ["", "## 6. Why It Matters", "", answer.get("why_it_matters", ""), ""]
+    lines += ["## 7. Exam Perspective", "", answer.get("exam_perspective", ""), ""]
+    if answer.get("subject") == "Geography":
+        geography = answer.get("geography", {})
+        lines += ["## Geography Map & Location Check", ""]
+        lines += [f"- **Type:** {geography.get('type', 'General Geography')}"]
+        lines += [f"- **Data year:** {geography.get('data_year', 'Not applicable')}"]
+        lines += [f"- **Map note:** {geography.get('map_note', 'Schematic / not to scale')}"]
+        lines += [f"- **Boundary note:** {geography.get('boundary_note', 'Not applicable')}"]
+        locations = geography.get("important_locations", [])
+        if locations:
+            lines += ["- **Important locations:**"] + [f"  - {item}" for item in locations]
+        lines.append("")
+    lines += ["## 8. Common Mistakes", ""]
     lines += [f"- {item}" for item in answer.get("common_mistakes", [])] or ["- No specific mistake listed."]
-    lines += ["", "## 7. Exam-Ready Final Answer", "", answer.get("final_answer", ""), ""]
-    lines += ["## 8. Practice Questions", "", "### Short Answer", ""]
+    lines += ["", "## 9. Exam-Ready Final Answer", "", answer.get("final_answer", ""), ""]
+    lines += ["## 10. Practice Questions", "", "### Short Answer", ""]
     lines += [f"{index}. {item}" for index, item in enumerate(answer.get("short_questions", []), 1)] or ["No short questions generated."]
     lines += ["", "### Long Answer", ""]
     lines += [f"{index}. {item}" for index, item in enumerate(answer.get("long_questions", []), 1)] or ["No long questions generated."]
+    if answer.get("mcqs"):
+        lines += ["", "### MCQ", ""]
+        for index, item in enumerate(answer["mcqs"], 1):
+            lines.append(f"{index}. {item['question']}")
+            lines += [f"   - {option}" for option in item.get("options", [])]
+            lines.append(f"   - **Answer:** {item.get('answer', '')}")
     lines += ["", "## Verification Notes", ""]
     lines += [f"- {item}" for item in answer.get("verification_notes", [])] or ["- No verification note returned."]
     lines += ["", "## Sources", ""]
     for item in answer.get("sources", []):
-        lines.append(f"- [{item['title']}]({item['uri']})" if item.get("uri") else f"- {item['title']}")
+        source_label = item.get("source_type", "Source")
+        lines.append(
+            f"- [{item['title']}]({item['uri']}) — {source_label}"
+            if item.get("uri") else f"- {item['title']} — {source_label}"
+        )
     if not answer.get("sources"):
         route = answer.get("route", {})
         if route.get("code_execution"):
@@ -882,6 +1353,95 @@ def _svg_diagram(diagram: dict[str, Any]) -> str:
             inset = 80 + index * 105
             rects.append(f'<g class="node n{index + 1}"><rect x="{inset}" y="{130 + index * 65}" width="{1100 - 2 * inset}" height="{420 - index * 130}" rx="32" fill="{colors[index]}" stroke="#3730a3" stroke-width="4"/>{_svg_text(node, 550, 178 + index * 65, 42)}</g>')
         body = "".join(rects)
+    elif kind == "cross_section":
+        labels = (nodes + ["Source", "Slope", "Crest", "Leeward side", "Outcome"])[:5]
+        if any("magma" in label.casefold() or "volcano" in label.casefold() for label in labels):
+            body = (
+                '<path d="M120,510 L350,510 L535,185 L565,185 L770,510 L1020,510" fill="#d1fae5" stroke="#0f766e" stroke-width="5"/>'
+                '<ellipse cx="550" cy="475" rx="125" ry="55" fill="#fb923c" stroke="#c2410c" stroke-width="5"/>'
+                '<path d="M550,430 C540,355 565,300 550,205" fill="none" stroke="#dc2626" stroke-width="18"/>'
+                '<path d="M542,192 Q550,178 575,192" fill="none" stroke="#7f1d1d" stroke-width="8"/>'
+                '<path d="M568,220 C650,260 650,335 735,390" fill="none" stroke="#f97316" stroke-width="12"/>'
+                '<g fill="#94a3b8" stroke="#475569" stroke-width="3"><circle cx="550" cy="135" r="35"/><circle cx="600" cy="135" r="42"/><circle cx="645" cy="150" r="31"/><circle cx="585" cy="105" r="28"/></g>'
+                + _svg_text(labels[0], 550, 480, 18)
+                + _svg_text(labels[1], 505, 330, 16)
+                + _svg_text(labels[2], 490, 175, 15)
+                + _svg_text(labels[3], 720, 360, 16)
+                + _svg_text(labels[4], 720, 120, 16)
+            )
+        else:
+            body = (
+                '<path d="M40,500 L250,500 L470,175 L650,500 L1060,500" fill="#d1fae5" stroke="#0f766e" stroke-width="5"/>'
+                '<path d="M40,500 L40,390 Q140,350 250,395 L250,500 Z" fill="#67e8f9"/>'
+                '<path d="M110,350 C245,260 330,260 420,245" fill="none" stroke="#2563eb" stroke-width="8" marker-end="url(#arrow)"/>'
+                '<path d="M565,250 C700,300 790,365 900,390" fill="none" stroke="#f59e0b" stroke-width="8" marker-end="url(#arrow)"/>'
+                + _svg_text(labels[0], 135, 445, 18)
+                + _svg_text(labels[1], 325, 335, 18)
+                + _svg_text(labels[2], 490, 150, 18)
+                + _svg_text(labels[3], 720, 410, 20)
+                + _svg_text(labels[4], 920, 465, 18)
+            )
+    elif kind == "wind_map":
+        labels = (nodes + ["Source", "Pressure", "Flow", "Land", "Outcome"])[:5]
+        arrows = "".join(
+            f'<path d="M{100 + i * 40},{220 + i * 60} C{350 + i * 25},{120 + i * 75} {650 + i * 20},{190 + i * 55} {920},{170 + i * 75}" fill="none" stroke="{color}" stroke-width="8" marker-end="url(#arrow)"/>'
+            for i, color in enumerate(("#2563eb", "#0891b2", "#7c3aed"))
+        )
+        body = (
+            '<path d="M610,135 Q780,110 1000,200 L960,470 Q760,520 590,430 Q670,320 610,135 Z" fill="#bbf7d0" stroke="#0f766e" stroke-width="4"/>'
+            + arrows
+            + _svg_text(labels[0], 150, 170, 18)
+            + _svg_text(labels[1], 315, 455, 18)
+            + _svg_text(labels[2], 515, 205, 18)
+            + _svg_text(labels[3], 790, 335, 18)
+            + _svg_text(labels[4], 915, 505, 18)
+        )
+    elif kind == "drainage":
+        labels = (nodes + ["Source", "Upper course", "Tributary", "Main channel", "Mouth"])[:5]
+        body = (
+            '<path d="M120,160 C260,250 350,240 500,345 S790,390 1000,500" fill="none" stroke="#0284c7" stroke-width="18"/>'
+            '<path d="M235,145 C315,220 370,250 480,330 M390,145 C430,220 460,270 520,350 M620,190 C650,270 690,330 760,395" fill="none" stroke="#38bdf8" stroke-width="10"/>'
+            + _svg_text(labels[0], 130, 135, 18)
+            + _svg_text(labels[1], 300, 305, 18)
+            + _svg_text(labels[2], 420, 130, 18)
+            + _svg_text(labels[3], 690, 435, 18)
+            + _svg_text(labels[4], 970, 535, 18)
+        )
+    elif kind == "plates":
+        labels = (nodes + ["Plate A", "Boundary", "Plate B", "Stress", "Surface effect"])[:5]
+        body = (
+            '<path d="M80,280 L510,280 L550,410 L80,410 Z" fill="#fde68a" stroke="#a16207" stroke-width="4"/>'
+            '<path d="M1020,280 L590,280 L550,410 L1020,410 Z" fill="#fecaca" stroke="#b91c1c" stroke-width="4"/>'
+            '<path d="M250,235 L475,235" stroke="#4f46e5" stroke-width="9" marker-end="url(#arrow)"/>'
+            '<path d="M850,235 L625,235" stroke="#4f46e5" stroke-width="9" marker-end="url(#arrow)"/>'
+            '<path d="M550,160 L520,220 L585,215 L545,270" fill="none" stroke="#ef4444" stroke-width="7"/>'
+            + _svg_text(labels[0], 260, 350, 20)
+            + _svg_text(labels[1], 550, 455, 18)
+            + _svg_text(labels[2], 840, 350, 20)
+            + _svg_text(labels[3], 550, 145, 18)
+            + _svg_text(labels[4], 550, 535, 20)
+        )
+    elif kind in {"map", "choropleth"}:
+        labels = (nodes + ["Location A", "Location B", "Region", "Pattern", "Result"])[:5]
+        shades = ("#c7d2fe", "#a7f3d0", "#fde68a", "#fecaca")
+        regions = "".join(
+            f'<path d="{path}" fill="{shades[index]}" stroke="#4338ca" stroke-width="4"/>'
+            for index, path in enumerate((
+                "M220,170 L470,145 L500,300 L280,335 Z",
+                "M500,160 L780,180 L745,345 L505,300 Z",
+                "M285,340 L505,305 L565,500 L250,475 Z",
+                "M510,305 L750,350 L820,485 L565,500 Z",
+            ))
+        )
+        body = (
+            regions
+            + '<circle cx="390" cy="260" r="13" fill="#dc2626"/><circle cx="665" cy="275" r="13" fill="#dc2626"/>'
+            + _svg_text(labels[0], 385, 235, 18)
+            + _svg_text(labels[1], 675, 250, 18)
+            + _svg_text(labels[2], 405, 420, 18)
+            + _svg_text(labels[3], 665, 420, 18)
+            + _svg_text(labels[4], 550, 550, 22)
+        )
     else:
         shown = nodes[:5]
         gap = 880 / max(1, len(shown) - 1)
@@ -904,6 +1464,9 @@ def _svg_diagram(diagram: dict[str, Any]) -> str:
                 arrows.append(f'<path d="M{edge_start},{py} C{edge_start + 35},{py} {edge_end - 35},{y} {edge_end},{y}" fill="none" stroke="#4f46e5" stroke-width="5" marker-end="url(#arrow)"/>{_svg_edge_text(label, edge_x, edge_y)}')
         kind_label = html.escape(kind.title())
         body = "".join(arrows + boxes) + f'<text x="550" y="535" text-anchor="middle" font-size="22" font-weight="700" fill="#0f766e">{kind_label} diagram - follow the labelled relationship</text>'
+    accuracy_note = html.escape(str(diagram.get("accuracy_note", "")))
+    if accuracy_note:
+        body += f'<text x="550" y="600" text-anchor="middle" font-size="15" font-weight="700" fill="#475569">{accuracy_note}</text>'
     return head + body + "</svg>"
 
 

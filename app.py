@@ -1020,7 +1020,11 @@ Exam Saathi विद्यार्थियों के study documents क�
 
         with gr.Tab("📤 Secure Upload"):
             gr.Markdown(
-                "## ⚡ Quick Question Solver\n\nएक सवाल solve करना है? नीचे लिखकर **Enter** दबाएँ—PDF upload जरूरी नहीं है। Math, Physics, Chemistry और दूसरे subjects के लिए step-by-step answer मिलेगा। Numeric math में final expression independent calculator से verify होगा; mismatch होने पर गलत answer नहीं दिखेगा।",
+                f"## ⚡ Quick Question Solver · Verified Engine v{ENGINE_VERSION}\n\n"
+                "एक सवाल solve करना है? नीचे लिखकर **Enter** दबाएँ—PDF upload जरूरी नहीं है। "
+                "Math/Physics/Chemistry में calculation checks, General Knowledge में curated verification, "
+                "और Geography में question-specific labelled diagram मिलेगा। Current affairs, office-holder, "
+                "latest, unique और changing facts में online verification अपने-आप ON होगा।",
                 elem_classes=["exam-card"],
             )
             quick_language = gr.Dropdown(
@@ -1242,8 +1246,9 @@ Exam Saathi विद्यार्थियों के study documents क�
             gr.Markdown(
                 f"## Ask Exam Saathi · Verified Engine v{ENGINE_VERSION}\n\n"
                 "Ask any standalone question or first process your PDF/photo/text for source-grounded answers. "
-                "Groq handles text reasoning first; Compound uses web/code tools for current facts and STEM calculations. "
-                "Gemini remains the OCR and automatic answer backup when configured.",
+                "Provider routing is automatic: Perplexity (when configured) or Groq/Gemini grounds current facts; "
+                "Groq/OpenAI handle detailed reasoning; Gemini remains the OCR/vision backup. Geography answers "
+                "include a labelled educational SVG and clearly mark schematic maps as not to scale.",
                 elem_classes=["exam-card"],
             )
             answer_language = gr.Dropdown(
@@ -1317,8 +1322,9 @@ Exam Saathi विद्यार्थियों के study documents क�
 
 - Uploaded content is processed for the current app session.
 - Low-confidence scanned documents are sent to Google Gemini for OCR when GEMINI_API_KEY is configured.
-- Typed questions are sent to Groq first when GROQ_API_KEY is configured; Gemini is the optional answer fallback.
-- Current-fact questions may use Groq Compound web search. Online sources are listed with the answer.
+- Typed questions use automatic provider routing. Depending on configured keys, they may be sent to Groq, OpenAI, Gemini or Perplexity.
+- Current-fact questions automatically request web grounding. Perplexity Sonar is tried first when configured, followed by Groq/Gemini web tools; online sources and verification time are listed.
+- Geography SVGs are educational schematics unless exact source-backed geometry is available; they never claim surveyed boundary accuracy.
 - Recorded voice is sent to Google Gemini only when the student presses Convert Voice; it is used to create the question transcript.
 - The application does not intentionally publish student documents.
 - Friend quiz export contains generated questions, answers and source references—not the original uploaded PDF.

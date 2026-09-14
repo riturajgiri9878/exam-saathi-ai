@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 import gradio as gr
 from study_export import export_study_guide
@@ -390,6 +391,7 @@ def _verification_panel(answer: dict[str, Any]) -> str:
 
 def quick_solver_ui(
     question, history, language, subject_choice, allow_web, analysis,
+    conversations, active_chat_id,
     request: gr.Request,
 ):
     try:
@@ -415,9 +417,68 @@ def quick_solver_ui(
             f"PDF is static/printable; HTML contains safe offline animation. "
             f"Files are unique, so an older answer cannot be reused from cache."
         )
-        return updated, "", _verification_panel(answer), pdf_file, html_file, status
+        verification = _verification_panel(answer)
+        chat_id = str(active_chat_id or uuid4().hex)
+        saved = list(conversations or [])
+        existing = next((item for item in saved if item.get("id") == chat_id), None)
+        title = (
+            existing.get("title", "") if existing else
+            " ".join(safe_question.split())[:52]
+        ) or "New question"
+        record = {
+            "id": chat_id,
+            "title": title,
+            "messages": updated,
+            "verification": verification,
+            "pdf_file": pdf_file,
+            "html_file": html_file,
+            "visual_status": status,
+        }
+        saved = [record] + [item for item in saved if item.get("id") != chat_id]
+        saved = saved[:25]
+        choices = [(item.get("title", "Question"), item.get("id", "")) for item in saved]
+        return (
+            updated, "", verification, pdf_file, html_file, status,
+            saved, chat_id, gr.update(choices=choices, value=chat_id),
+        )
     except Exception as error:
-        return gr.skip(), gr.skip(), '❌ '+html.escape(str(error)),None,None,''
+        return (
+            gr.skip(), gr.skip(), '❌ ' + html.escape(str(error)), None, None, '',
+            gr.skip(), gr.skip(), gr.skip(),
+        )
+
+
+def new_quick_chat_ui(conversations):
+    """Clear the active conversation while keeping this session's history."""
+    choices = [
+        (item.get("title", "Question"), item.get("id", ""))
+        for item in (conversations or [])
+    ]
+    return [], "", "", None, None, "", conversations or [], "", gr.update(
+        choices=choices, value=None,
+    )
+
+
+def open_quick_chat_ui(selected_chat_id, conversations):
+    """Restore a solved question from the current browser session."""
+    for item in conversations or []:
+        if item.get("id") == selected_chat_id:
+            return (
+                item.get("messages", []),
+                "",
+                item.get("verification", ""),
+                item.get("pdf_file"),
+                item.get("html_file"),
+                item.get("visual_status", ""),
+                selected_chat_id,
+            )
+    return [], "", "", None, None, "", ""
+
+
+def process_home_attachment_ui(file_paths):
+    """Run the secure document pipeline from the Home chat composer."""
+    values = process_file_ui(file_paths)
+    return (*values, values[0])
 
 
 def approve_corrected_text(edited_text: str, current_state: dict[str, Any]):
@@ -479,7 +540,7 @@ def detect_intent(request_text: str) -> tuple[str, str, list[str]]:
 def transcribe_voice_ui(audio_path: str | None, language: str):
     try:
         transcript = transcribe_study_audio(audio_path, language)
-        return transcript, "✅ Voice question ready. अब **Ask Exam Saathi** दबाएँ।"
+        return transcript, "✅ Voice question is ready. Review it, then press **Send**."
     except Exception as error:
         return gr.skip(), f"❌ {html.escape(str(error))}"
 
@@ -965,6 +1026,49 @@ html, body {
     .exam-header h1 { font-size: 29px !important; }
     .exam-card, .security-card, .warning-card { padding: 12px !important; }
 }
+/* Chat-first Home */
+#chat-history-sidebar {
+    background: rgba(247, 244, 255, .98) !important;
+    border-right: 1px solid #cfc3e5 !important;
+}
+#chat-history-sidebar .sidebar-brand {
+    color: #35215e !important; font-size: 20px; font-weight: 900;
+    margin: 2px 0 12px;
+}
+#chat-history-sidebar label { font-weight: 800 !important; }
+.exam-header {
+    padding: 14px 20px !important; border-radius: 16px !important;
+    text-align: left !important; display: flex; align-items: center;
+    justify-content: space-between; gap: 16px;
+}
+.exam-header h1 { margin: 0 !important; font-size: 25px !important; }
+.exam-header p { margin: 2px 0 0 !important; font-size: 13px !important; }
+.exam-header .header-copy { min-width: 0; }
+.exam-header .header-copy p { opacity: .9; }
+.exam-header .logout-button, .exam-header .auth-warning {
+    flex: 0 0 auto; margin-top: 0 !important;
+}
+.chat-home-hero { text-align: center; margin: 18px auto 12px; }
+.chat-home-hero h1 { color: #312e81 !important; font-size: clamp(28px, 4vw, 43px); margin: 0; }
+.chat-home-hero p { color: #5b5670 !important; margin-top: 7px; }
+.chat-composer {
+    background: rgba(255,255,255,.94) !important;
+    border: 1px solid #c6b6df !important; border-radius: 20px !important;
+    padding: 12px !important; box-shadow: 0 12px 28px rgba(49,46,129,.12) !important;
+}
+.chat-composer textarea { min-height: 92px !important; border-radius: 14px !important; }
+.chat-tools { align-items: end !important; }
+#home-attach-button {
+    min-height: 46px !important; border-radius: 12px !important;
+    background: #e7f5ef !important; color: #193d38 !important; font-weight: 800 !important;
+}
+#home-attach-button :is(span,p,svg) { color: #193d38 !important; }
+.download-accordion { margin-top: 12px !important; }
+@media (max-width: 768px) {
+    .exam-header { display: block; text-align: center !important; }
+    .exam-header .logout-button, .exam-header .auth-warning { margin-top: 8px !important; }
+    .chat-home-hero { margin-top: 10px; }
+}
 """
 
 
@@ -976,16 +1080,29 @@ with gr.Blocks(title="Exam Saathi AI") as demo:
     flashcard_state = gr.State({"cards": [], "index": 0})
     quiz_state = gr.State({"items": [], "index": 0, "checked": False})
     progress_state = gr.State({"xp": 0, "attempted": 0, "correct": 0, "weak_topics": []})
+    quick_conversations = gr.State([])
+    quick_active_chat = gr.State("")
+
+    with gr.Sidebar(label="Study chats", open=True, width=270, elem_id="chat-history-sidebar"):
+        gr.HTML('<div class="sidebar-brand">📘 Exam Saathi</div>')
+        sidebar_new_chat = gr.Button("✏️ New chat", variant="primary")
+        history_picker = gr.Radio(
+            choices=[], label="Recent questions", interactive=True,
+        )
+        gr.Markdown(
+            "**Study tools**\n\nUpload notes, learn a chapter, revise with flashcards, "
+            "or open Previous Papers from the top menu."
+        )
 
     gr.HTML(
         f"""
         <div class="study-sky" aria-hidden="true"><span class="rainbow">🌈</span>
         <span class="butterfly">🦋</span><span class="books">📚</span><span class="star">⭐</span></div>
         <div class="exam-header">
-          <h1>📘 EXAM SAATHI AI</h1>
-          <h2>Secure Agentic AI Study Assistant</h2>
-          <p><strong>Version {ENGINE_VERSION} — Verified Multilingual Answer Engine</strong></p>
-          <p>PDF/Image → OCR → Human Review → NLP → Embeddings → Smart Notes → Questions → Trends</p>
+          <div class="header-copy">
+            <h1>📘 EXAM SAATHI AI</h1>
+            <p><strong>Verified Multilingual Answer Engine · v{ENGINE_VERSION}</strong></p>
+          </div>
           {AUTH_CONTROL}
         </div>
         """
@@ -993,75 +1110,66 @@ with gr.Blocks(title="Exam Saathi AI") as demo:
 
     with gr.Tabs():
         with gr.Tab("🏠 Home"):
-            gr.Markdown(
-                """
-## Welcome to Exam Saathi
-
-Exam Saathi विद्यार्थियों के study documents को source-based revision material में बदलता है।
-
-- Secure PDF and camera-image upload
-- OCR confidence and Human-in-the-Loop correction
-- TF-IDF topics and sentence embeddings
-- Complete smart notes with filename and page references
-- Original source diagrams with descriptions, page references and zoom
-- 15-minute exam sprint, flashcards and active-recall quiz
-- Hinglish/Hindi/English answers with optional microphone input
-- Multi-image notebook scanner with auto-crop and enhancement
-- Session XP, revision planner, low-data pack and private friend quiz export
-- Short, long and MCQ practice
-- Previous-paper trend analysis
-- Supervisor, specialist and reviewer workflow
-- Prompt-injection protection and recovery plans
-
-> Trend scores revision priorities हैं, guaranteed exam predictions नहीं।
-                """,
-                elem_classes=["exam-card"],
-            )
-
-        with gr.Tab("📤 Secure Upload"):
-            gr.Markdown(
-                f"## ⚡ Quick Question Solver · Verified Engine v{ENGINE_VERSION}\n\n"
-                "एक सवाल solve करना है? नीचे लिखकर **Enter** दबाएँ—PDF upload जरूरी नहीं है। "
-                "Math/Physics/Chemistry में calculation checks, General Knowledge में curated verification, "
-                "और Geography में question-specific labelled diagram मिलेगा। Current affairs, office-holder, "
-                "latest, unique और changing facts में online verification अपने-आप ON होगा।",
-                elem_classes=["exam-card"],
-            )
-            quick_language = gr.Dropdown(
-                choices=SUPPORTED_LANGUAGES,value="Hinglish",label="Answer language",
-            )
-            quick_subject = gr.Dropdown(
-                choices=["Auto","Mathematics","Physics","Chemistry","Biology","Geography","History","General Studies"],
-                value="Auto",label="Subject (Auto works for most questions; choose manually if needed)",
+            gr.HTML(
+                '<div class="chat-home-hero"><h1>What do you want to learn?</h1>'
+                '<p>Ask one question, attach your notes, or speak in your preferred language.</p></div>'
             )
             quick_chat = gr.Chatbot(
-                label="Your solved questions",height=420,elem_id="quick-solver-chat",
+                label="Your conversation", height=460, elem_id="quick-solver-chat",
                 latex_delimiters=[
-                    {"left":"$$","right":"$$","display":True},
-                    {"left":r"\(","right":r"\)","display":False},
+                    {"left": "$$", "right": "$$", "display": True},
+                    {"left": r"\(", "right": r"\)", "display": False},
                 ],
             )
-            quick_question = gr.Textbox(
-                label="Type one question",
-                placeholder=r"Example: Find the exact value of (sqrt(18)/(sqrt(12)-sqrt(6)))^10",
-                lines=3,
-            )
-            quick_web = gr.Checkbox(
-                label="Force online source verification (current/unique facts use it automatically)",value=False,
-            )
-            with gr.Row():
-                quick_send = gr.Button("➤ Solve step by step",variant="primary")
-                quick_clear = gr.Button("New question")
+            with gr.Group(elem_classes=["chat-composer"]):
+                quick_question = gr.Textbox(
+                    label="Message Exam Saathi",
+                    placeholder="Ask any question — Maths, Physics, Chemistry, Biology, Geography, GK...",
+                    lines=3,
+                    autofocus=True,
+                )
+                with gr.Row(elem_classes=["chat-tools"]):
+                    quick_attachment = gr.UploadButton(
+                        "📎 Add PDF / image",
+                        file_types=[".pdf", ".html", ".htm", ".txt", ".png", ".jpg", ".jpeg"],
+                        file_count="multiple", type="filepath", elem_id="home-attach-button",
+                    )
+                    quick_mic = gr.Audio(
+                        sources=["microphone"], type="filepath", label="🎙️ Speak",
+                    )
+                    quick_transcribe = gr.Button("Use voice")
+                    quick_send = gr.Button("➤ Send", variant="primary", elem_classes=["primary-button"])
+                quick_attachment_status = gr.Markdown()
+                quick_voice_status = gr.Markdown()
+            with gr.Accordion("Language, subject and verification", open=False):
+                with gr.Row():
+                    quick_language = gr.Dropdown(
+                        choices=SUPPORTED_LANGUAGES, value="Hinglish", label="Answer language",
+                    )
+                    quick_subject = gr.Dropdown(
+                        choices=["Auto", "Mathematics", "Physics", "Chemistry", "Biology", "Geography", "History", "General Studies"],
+                        value="Auto", label="Subject",
+                    )
+                quick_web = gr.Checkbox(
+                    label="Force online verification (current facts use it automatically)", value=False,
+                )
             quick_error = gr.Markdown()
-            gr.Markdown(
-                "### 📥 Download your visual answer\n\nEvery solved question creates the same answer in two formats: a reliable static PDF for printing and an animated offline HTML lesson for interactive study. Standard PDFs do not reliably play animation, so animation is kept in the HTML instead of pretending it will work in every PDF reader.",
-                elem_classes=["exam-card"],
-            )
-            with gr.Row():
-                quick_pdf = gr.File(label="Download colorful PDF",interactive=False,elem_classes=["study-file"])
-                quick_html = gr.File(label="Download animated HTML",interactive=False,elem_classes=["study-file"])
-            quick_visual_status = gr.Markdown()
-            gr.Markdown("---\n## 📚 Upload Study Material",elem_classes=["exam-card"])
+            with gr.Accordion("📥 Download this visual answer", open=False, elem_classes=["download-accordion"]):
+                gr.Markdown(
+                    "Download a colorful printable PDF or an animated offline HTML lesson. "
+                    "Each file is generated fresh for the current answer."
+                )
+                with gr.Row():
+                    quick_pdf = gr.File(
+                        label="Download colorful PDF", interactive=False, elem_classes=["study-file"],
+                    )
+                    quick_html = gr.File(
+                        label="Download animated HTML", interactive=False, elem_classes=["study-file"],
+                    )
+                quick_visual_status = gr.Markdown()
+
+        with gr.Tab("📤 Secure Upload"):
+            gr.Markdown("## 📚 Upload Study Material", elem_classes=["exam-card"])
             gr.Markdown(
             "Select up to 10 PDFs or camera images together. "
                 "Maximum 10 MB per file, 40 MB combined and 50 pages per PDF. "
@@ -1346,11 +1454,33 @@ Exam Saathi विद्यार्थियों के study documents क�
             teacher_output,teacher_history,teacher_answer],show_progress='minimal').then(
                 fn=reset_lesson_for_source,inputs=[current_analysis,detailed_lesson],outputs=lesson_reset_outputs)
     chat_transcribe.click(fn=transcribe_voice_ui,inputs=[chat_mic,chat_language],outputs=[chat_question,chat_voice_status])
-    quick_outputs=[quick_chat,quick_question,quick_error,quick_pdf,quick_html,quick_visual_status]
-    quick_inputs=[quick_question,quick_chat,quick_language,quick_subject,quick_web,current_analysis]
+    quick_transcribe.click(
+        fn=transcribe_voice_ui,
+        inputs=[quick_mic, quick_language],
+        outputs=[quick_question, quick_voice_status],
+        show_progress='minimal',
+    )
+    quick_outputs=[
+        quick_chat,quick_question,quick_error,quick_pdf,quick_html,quick_visual_status,
+        quick_conversations,quick_active_chat,history_picker,
+    ]
+    quick_inputs=[
+        quick_question,quick_chat,quick_language,quick_subject,quick_web,current_analysis,
+        quick_conversations,quick_active_chat,
+    ]
     quick_send.click(fn=quick_solver_ui,inputs=quick_inputs,outputs=quick_outputs,show_progress='minimal')
     quick_question.submit(fn=quick_solver_ui,inputs=quick_inputs,outputs=quick_outputs,show_progress='minimal')
-    quick_clear.click(fn=lambda:([], '', '',None,None,''),outputs=quick_outputs)
+    sidebar_new_chat.click(
+        fn=new_quick_chat_ui,inputs=[quick_conversations],outputs=quick_outputs,
+    )
+    history_picker.change(
+        fn=open_quick_chat_ui,
+        inputs=[history_picker,quick_conversations],
+        outputs=[
+            quick_chat,quick_question,quick_error,quick_pdf,quick_html,
+            quick_visual_status,quick_active_chat,
+        ],
+    )
     for trigger in [chat_send.click,chat_question.submit]:
         trigger(fn=smart_chat_ui,inputs=[chat_question,chat_box,current_analysis,chat_language,chat_web],outputs=[chat_box,chat_suggestions,chat_error],show_progress='minimal')
     chat_clear.click(fn=lambda:([], '', ''),outputs=[chat_box,chat_suggestions,chat_error])
@@ -1367,6 +1497,21 @@ Exam Saathi विद्यार्थियों के study documents क�
     paper_catalog_import.click(fn=import_paper_catalog_ui,inputs=[paper_catalog_import_file],outputs=[paper_catalog,paper_catalog_transfer_status])
     paper_compare.click(fn=paper_priority_ui,inputs=[current_analysis,paper_catalog,paper_board,paper_level,paper_course,paper_subject,paper_syllabus,target_exam_year],outputs=[current_analysis,paper_report,notes_output,topics_output])
     choose_files.upload(fn=lambda files: files, inputs=[choose_files], outputs=[study_file])
+    quick_attachment.upload(
+        fn=process_home_attachment_ui,
+        inputs=[quick_attachment],
+        outputs=[
+            upload_status, extracted_preview, ocr_status, corrected_text,
+            topics_output, notes_output, diagram_info, diagram_gallery,
+            formulas_output, questions_output, current_analysis,
+            quick_attachment_status,
+        ],
+        show_progress="minimal",
+    ).then(
+        fn=reset_lesson_for_source,
+        inputs=[current_analysis,detailed_lesson],
+        outputs=lesson_reset_outputs,
+    )
     process_button.click(
         fn=process_file_ui,
         inputs=[study_file],

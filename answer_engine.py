@@ -31,7 +31,7 @@ from urllib.request import Request, urlopen
 import pymupdf
 
 
-ENGINE_VERSION = "4.4.1"
+ENGINE_VERSION = "4.5.0"
 ANSWER_PROVIDER = os.environ.get("ANSWER_PROVIDER", "auto").strip().lower()
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
 GROQ_REASONING_MODEL = os.environ.get(

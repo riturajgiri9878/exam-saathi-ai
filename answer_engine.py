@@ -31,7 +31,7 @@ from urllib.request import Request, urlopen
 import pymupdf
 
 
-ENGINE_VERSION = "4.4.0"
+ENGINE_VERSION = "4.4.1"
 ANSWER_PROVIDER = os.environ.get("ANSWER_PROVIDER", "auto").strip().lower()
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
 GROQ_REASONING_MODEL = os.environ.get(
@@ -145,6 +145,13 @@ def detect_subject(question: str) -> str:
     return best if scores[best] else "General Studies"
 
 
+def _contains_search_term(text: str, term: str) -> bool:
+    """Match English search terms as words, so `now` never matches `unknown`."""
+    if re.fullmatch(r"[a-z0-9' -]+", term):
+        return bool(re.search(rf"(?<![a-z0-9]){re.escape(term)}(?![a-z0-9])", text))
+    return term in text
+
+
 def detect_geography_type(question: str) -> str:
     lowered = question.casefold()
     scores = {
@@ -181,14 +188,26 @@ def choose_tools(question: str, rag_context: list[dict[str, Any]] | None = None)
     current_year = int(time.strftime("%Y", time.gmtime()))
     mentioned_years = [int(value) for value in re.findall(r"\b20\d{2}\b", lowered)]
     recent_year = any(year >= current_year - 1 for year in mentioned_years)
-    high_risk_fact = any(term in lowered for term in WEB_RISK_TERMS) or recent_year
+    high_risk_fact = any(_contains_search_term(lowered, term) for term in WEB_RISK_TERMS) or recent_year
     # Static textbook/general-knowledge questions do not need a slow live web
     # tool call. Current, unique, superlative and office-holder claims still do.
     use_web = high_risk_fact
-    use_code = any(term in lowered for term in CALCULATION_TERMS)
+    use_code = any(_contains_search_term(lowered, term) for term in CALCULATION_TERMS)
     use_code = use_code or bool(re.search(r"[=+\-*/^]|\\frac|\\sqrt|\d", question)) and subject in {
         "Mathematics", "Physics", "Chemistry", "Computer Science"
     }
+    qualitative_organic = subject == "Chemistry" and any(term in lowered for term in (
+        "iodoform", "tollens", "2,4-dnp", "ozonolysis", "organic compound", "identify",
+        "structures", "iupac", "dehydration",
+    ))
+    quantitative_chemistry = any(_contains_search_term(lowered, term) for term in (
+        "calculate", "exact value", "rate constant", "equilibrium pressure", "molarity",
+        "molality", "ph", "percentage yield", "mass", "volume", "concentration",
+    ))
+    if qualitative_organic and not quantitative_chemistry:
+        # Formula subscripts and test names contain digits but do not require a
+        # calculator/code-interpreter. The normal reasoning model is faster.
+        use_code = False
     geography_type = detect_geography_type(question) if subject == "Geography" else ""
     visual_type = _geography_visual_type(question, geography_type) if geography_type else "concept"
     government_fact = any(term in lowered for term in (
@@ -209,7 +228,7 @@ def choose_tools(question: str, rag_context: list[dict[str, Any]] | None = None)
         geography_type=geography_type,
         visual_type=visual_type,
         source_policy=source_policy,
-        freshness_required=recent_year or any(term in lowered for term in (
+        freshness_required=recent_year or any(_contains_search_term(lowered, term) for term in (
             "current", "currently", "latest", "today", "now", "present", "recent",
             "वर्तमान", "आज", "अभी",
         )),
@@ -727,15 +746,19 @@ def _default_generate(prompt: str, use_web: bool, use_code: bool) -> tuple[str, 
             "OpenAI": "OPENAI_API_KEY",
         }[name]
         if not os.environ.get(key_name, "").strip():
-            errors.append(f"{name}: {key_name} not configured")
+            # Missing optional fallbacks are normal in auto mode. Report a
+            # missing key only when the administrator explicitly selected it.
+            if provider != "auto":
+                errors.append(f"{name}: {key_name} not configured")
             continue
         try:
             return generate(prompt, use_web, use_code)
         except Exception as error:
             errors.append(f"{name}: {_provider_error_text(error)}")
+    detail = " | ".join(errors) if errors else "No answer provider API key is configured"
     raise RuntimeError(
         "Answer service is temporarily unavailable. "
-        + " | ".join(errors)
+        + detail
         + ". Check Render keys/limits, wait for quota reset, then retry."
     )
 

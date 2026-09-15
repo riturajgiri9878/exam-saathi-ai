@@ -817,6 +817,7 @@ def security_dashboard() -> str:
 
 
 CUSTOM_CSS = """
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Noto+Sans:wght@400;500;600;700&display=swap');
 :root, .dark {
     --body-background-fill: #eef2ff !important;
     --body-text-color: #0f172a !important;
@@ -828,6 +829,10 @@ CUSTOM_CSS = """
     --border-color-primary: #cbd5e1 !important;
     --loader-color: #4f46e5 !important;
     --color-accent: #4f46e5 !important;
+}
+html, body, .gradio-container,
+.gradio-container :is(button, input, textarea, select, label, p, li, a, summary, h1, h2, h3, h4, h5, h6) {
+    font-family: "Inter", "Noto Sans", Arial, sans-serif !important;
 }
 html, body { background: #eef2ff !important; }
 .gradio-container {
@@ -1633,6 +1638,12 @@ if __name__ == "__main__":
             primary_hue="indigo",
             secondary_hue="cyan",
             neutral_hue="slate",
+            font=[
+                gr.themes.GoogleFont("Inter"),
+                gr.themes.GoogleFont("Noto Sans"),
+                "Arial",
+                "sans-serif",
+            ],
         ),
         css=CUSTOM_CSS,
         auth=APP_AUTH,

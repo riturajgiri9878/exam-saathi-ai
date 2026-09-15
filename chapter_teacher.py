@@ -199,7 +199,7 @@ def lesson_steps(analysis,language,request='',existing=None,provider=None):
 
 
 LESSON_CSS = '''
-.chapter-guide{color:#202843;font:16px/1.8 system-ui,sans-serif;overflow-wrap:anywhere}
+.chapter-guide{color:#202843;font:16px/1.8 Inter,"Noto Sans",Arial,sans-serif;overflow-wrap:anywhere}
 .chapter-guide h2,.chapter-guide h3{color:#44317c!important;line-height:1.4}
 .chapter-guide .lesson-banner{background:linear-gradient(120deg,#e7ddff,#d9f5ec);padding:24px;border-radius:18px;margin:12px 0}
 .chapter-guide .topic{background:#fffdf9;border:1px solid #d8cce9;border-radius:18px;padding:26px;margin:24px 0;box-shadow:0 4px 12px #34334b09}

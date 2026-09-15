@@ -215,7 +215,7 @@ def export_friend_quiz(result: dict[str, Any]) -> str:
     document = f"""<!doctype html><html><head><meta charset='utf-8'>
 <meta name='viewport' content='width=device-width,initial-scale=1'>
 <title>Exam Saathi Friend Quiz</title><style>
-body{{font-family:system-ui;max-width:760px;margin:auto;padding:20px;background:#eef2ff;color:#172033}}
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Noto+Sans:wght@400;500;600;700&display=swap');body{{font-family:Inter,"Noto Sans",Arial,sans-serif;max-width:760px;margin:auto;padding:20px;background:#eef2ff;color:#172033}}
 section{{background:white;padding:18px;margin:16px 0;border-radius:16px;border:1px solid #cbd5e1}}
 summary{{cursor:pointer;font-weight:800;color:#4338ca}}small{{color:#475569}}
 </style></head><body><h1>🧠 Exam Saathi Friend Quiz</h1>{cards}</body></html>"""

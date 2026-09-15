@@ -31,7 +31,7 @@ from urllib.request import Request, urlopen
 import pymupdf
 
 
-ENGINE_VERSION = "4.5.0"
+ENGINE_VERSION = "4.5.1"
 ANSWER_PROVIDER = os.environ.get("ANSWER_PROVIDER", "auto").strip().lower()
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
 GROQ_REASONING_MODEL = os.environ.get(
@@ -59,6 +59,9 @@ GROQ_TIMEOUT_SECONDS = max(30, int(os.environ.get("GROQ_TIMEOUT_SECONDS", "60"))
 MAX_QUESTION_CHARACTERS = int(os.environ.get("MAX_QUESTION_CHARACTERS", "12000"))
 MAX_RAG_CHARACTERS = int(os.environ.get("MAX_RAG_CHARACTERS", "18000"))
 ARTIFACT_DIR = Path(os.environ.get("ANSWER_ARTIFACT_DIR", "/tmp/exam_saathi_answers"))
+BASE_DIR = Path(__file__).resolve().parent
+INTER_FONT_PATH = BASE_DIR / "Inter-Regular.ttf"
+INTER_BOLD_FONT_PATH = BASE_DIR / "Inter-Bold.ttf"
 
 
 SUPPORTED_LANGUAGES = [
@@ -1366,7 +1369,7 @@ def _svg_diagram(diagram: dict[str, Any]) -> str:
 
     head = f'''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 620" role="img" aria-label="{title}">
 <defs><linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#312e81"/><stop offset=".55" stop-color="#7c3aed"/><stop offset="1" stop-color="#0891b2"/></linearGradient><filter id="shadow"><feDropShadow dx="0" dy="8" stdDeviation="8" flood-opacity=".20"/></filter><marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto"><path d="M0,0 L12,6 L0,12 z" fill="#4f46e5"/></marker></defs>
-<style>.node{{filter:url(#shadow);animation:pulse 3s ease-in-out infinite alternate}}.n2{{animation-delay:-1s}}.n3{{animation-delay:-2s}}@keyframes pulse{{to{{transform:translateY(-8px)}}}}text{{font-family:Arial,sans-serif}}</style>
+<style>.node{{filter:url(#shadow);animation:pulse 3s ease-in-out infinite alternate}}.n2{{animation-delay:-1s}}.n3{{animation-delay:-2s}}@keyframes pulse{{to{{transform:translateY(-8px)}}}}text{{font-family:sans-serif}}</style>
 <rect width="1100" height="620" rx="34" fill="#eef2ff"/><rect width="1100" height="92" rx="34" fill="#4338ca"/><rect y="58" width="1100" height="34" fill="#4338ca"/><text x="550" y="58" text-anchor="middle" font-size="32" font-weight="700" fill="white">{title}</text>'''
 
     if kind == "nested":
@@ -1490,7 +1493,8 @@ def _svg_diagram(diagram: dict[str, Any]) -> str:
     accuracy_note = html.escape(str(diagram.get("accuracy_note", "")))
     if accuracy_note:
         body += f'<text x="550" y="600" text-anchor="middle" font-size="15" font-weight="700" fill="#475569">{accuracy_note}</text>'
-    return head + body + "</svg>"
+    document = head + body + "</svg>"
+    return document.replace("<text ", '<text font-family="sans-serif" ')
 
 
 def _read_latex_group(value: str, start: int) -> tuple[str, int] | None:
@@ -1625,7 +1629,8 @@ def _html_document(answer: dict[str, Any], markdown_text: str, svg: str) -> str:
     status = html.escape(str(answer.get("verification_status", "REVIEW_NEEDED")))
     body = _markdown_to_safe_html(markdown_text)
     return f'''<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="exam-saathi-engine" content="{ENGINE_VERSION}"><title>{title}</title><style>
-:root{{color-scheme:light}}*{{box-sizing:border-box}}body{{margin:0;background:radial-gradient(circle at 10% 8%,#ddd6fe,transparent 34%),radial-gradient(circle at 90% 22%,#a5f3fc,transparent 32%),linear-gradient(145deg,#f8fafc,#fff7ed);color:#172033;font:17px/1.72 "Noto Sans",Arial,sans-serif}}header{{padding:46px max(5vw,20px);background:linear-gradient(120deg,#312e81,#7c3aed,#0891b2);color:white}}h1{{font-size:clamp(30px,5vw,54px);margin:.15em 0}}main{{max-width:1040px;margin:auto;padding:26px}}section{{background:#ffffffea;border:1px solid #c7d2fe;border-radius:24px;padding:26px;margin:24px 0;box-shadow:0 14px 36px #312e8122}}h2,h3,h4{{color:#4338ca}}.diagram svg{{width:100%;height:auto}}.badge{{display:inline-block;background:#ecfdf5;color:#065f46;border:2px solid #10b981;border-radius:999px;padding:6px 14px;font-weight:800}}code{{background:#ede9fe;color:#5b21b6;padding:2px 5px;border-radius:5px}}.math{{font-family:"DejaVu Sans",Arial,sans-serif;font-weight:600;color:#312e81}}.frac{{display:inline-flex;vertical-align:middle;flex-direction:column;text-align:center;line-height:1.15;margin:0 .15em}}.frac>span:first-child{{border-bottom:1px solid currentColor;padding:0 .15em}}a{{color:#3730a3;overflow-wrap:anywhere}}button{{background:#172033;color:white;border:0;border-radius:12px;padding:12px 18px;font-weight:800;cursor:pointer}}.spark{{position:fixed;font-size:32px;animation:float 5s ease-in-out infinite alternate;pointer-events:none}}.s1{{left:2%;top:18%}}.s2{{right:2%;top:48%;animation-delay:-2s}}@keyframes float{{to{{transform:translateY(-45px) rotate(16deg)}}}}@media print{{.spark,button{{display:none}}body{{background:white}}section{{box-shadow:none;break-inside:avoid}}}}</style></head><body><span class="spark s1">✨</span><span class="spark s2">📚</span><header><small>EXAM SAATHI AI · Verified Answer Engine v{ENGINE_VERSION}</small><h1>{title}</h1><span class="badge">{status}</span> <button onclick="window.print()">Print / Save as PDF</button></header><main><section class="diagram"><h2>Animated Concept Diagram</h2>{svg}<p><strong>Note:</strong> HTML motion is a learning aid. The downloadable PDF contains a clear static diagram.</p></section><section>{body}</section></main></body></html>'''
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Noto+Sans:wght@400;500;600;700&display=swap');
+:root{{color-scheme:light}}*{{box-sizing:border-box}}body{{margin:0;background:radial-gradient(circle at 10% 8%,#ddd6fe,transparent 34%),radial-gradient(circle at 90% 22%,#a5f3fc,transparent 32%),linear-gradient(145deg,#f8fafc,#fff7ed);color:#172033;font:17px/1.72 Inter,"Noto Sans",Arial,sans-serif}}header{{padding:46px max(5vw,20px);background:linear-gradient(120deg,#312e81,#7c3aed,#0891b2);color:white}}h1{{font-size:clamp(30px,5vw,54px);margin:.15em 0}}main{{max-width:1040px;margin:auto;padding:26px}}section{{background:#ffffffea;border:1px solid #c7d2fe;border-radius:24px;padding:26px;margin:24px 0;box-shadow:0 14px 36px #312e8122}}h2,h3,h4{{color:#4338ca}}.diagram svg{{width:100%;height:auto}}.diagram text{{font-family:Inter,"Noto Sans",Arial,sans-serif!important}}.badge{{display:inline-block;background:#ecfdf5;color:#065f46;border:2px solid #10b981;border-radius:999px;padding:6px 14px;font-weight:800}}code{{background:#ede9fe;color:#5b21b6;padding:2px 5px;border-radius:5px}}.math{{font-family:"DejaVu Sans",Arial,sans-serif;font-weight:600;color:#312e81}}.frac{{display:inline-flex;vertical-align:middle;flex-direction:column;text-align:center;line-height:1.15;margin:0 .15em}}.frac>span:first-child{{border-bottom:1px solid currentColor;padding:0 .15em}}a{{color:#3730a3;overflow-wrap:anywhere}}button{{background:#172033;color:white;border:0;border-radius:12px;padding:12px 18px;font-weight:800;cursor:pointer}}.spark{{position:fixed;font-size:32px;animation:float 5s ease-in-out infinite alternate;pointer-events:none}}.s1{{left:2%;top:18%}}.s2{{right:2%;top:48%;animation-delay:-2s}}@keyframes float{{to{{transform:translateY(-45px) rotate(16deg)}}}}@media print{{.spark,button{{display:none}}body{{background:white}}section{{box-shadow:none;break-inside:avoid}}}}</style></head><body><span class="spark s1">✨</span><span class="spark s2">📚</span><header><small>EXAM SAATHI AI · Verified Answer Engine v{ENGINE_VERSION}</small><h1>{title}</h1><span class="badge">{status}</span> <button onclick="window.print()">Print / Save as PDF</button></header><main><section class="diagram"><h2>Animated Concept Diagram</h2>{svg}<p><strong>Note:</strong> HTML motion is a learning aid. The downloadable PDF contains a clear static diagram.</p></section><section>{body}</section></main></body></html>'''
 
 
 def _pdf_document(answer: dict[str, Any], markdown_text: str, svg: str) -> str:
@@ -1634,12 +1639,13 @@ def _pdf_document(answer: dict[str, Any], markdown_text: str, svg: str) -> str:
     status = html.escape(str(answer.get("verification_status", "REVIEW_NEEDED")))
     body = _markdown_to_safe_html(markdown_text)
     return f'''<!doctype html><html><head><meta charset="utf-8"><style>
-body{{color:#172033;font:12pt/1.55 Arial,sans-serif;margin:0}}.cover{{border:2px solid #4338ca;padding:18px;border-radius:14px;margin-bottom:18px}}.brand{{font-size:10pt;font-weight:700;color:#0f766e;letter-spacing:1px}}h1{{font-size:27pt;color:#312e81;margin:8px 0}}h2{{font-size:19pt;color:#4338ca;margin-top:20px;break-after:avoid;page-break-after:avoid}}h3{{font-size:15pt;color:#0f766e;break-after:avoid;page-break-after:avoid}}h4{{font-size:13pt;color:#4338ca;break-after:avoid;page-break-after:avoid}}.badge{{display:inline-block;border:2px solid #10b981;background:#ecfdf5;color:#065f46;padding:5px 10px;font-weight:700}}.diagram{{border:1px solid #c7d2fe;padding:14px;margin:14px 0}}.diagram svg{{width:92%;height:auto;display:block;margin:auto}}code{{background:#ede9fe;color:#5b21b6;padding:2px 4px}}.math{{font-family:"DejaVu Sans",Arial,sans-serif;font-weight:600;color:#312e81}}.frac{{display:inline-flex;vertical-align:middle;flex-direction:column;text-align:center;line-height:1.05;margin:0 .12em}}.frac>span:first-child{{border-bottom:1px solid currentColor;padding:0 .12em}}a{{color:#3730a3}}li{{margin-bottom:5px}}p{{margin:6px 0 10px;orphans:2;widows:2}}</style></head><body><div class="cover"><div class="brand">EXAM SAATHI AI - VERIFIED ANSWER ENGINE v{ENGINE_VERSION}</div><h1>{title}</h1><span class="badge">{status}</span></div><div class="diagram"><h2>Question-Specific Concept Diagram</h2>{svg}<p><strong>PDF note:</strong> This is the clear static frame. Open the HTML guide for animation.</p></div>{body}</body></html>'''
+@font-face{{font-family:Inter;src:url(Inter-Regular.ttf);font-weight:400}}@font-face{{font-family:Inter;src:url(Inter-Bold.ttf);font-weight:700}}body{{color:#172033;font:12pt/1.55 Inter,"Noto Sans",Arial,sans-serif;margin:0}}.cover{{border:2px solid #4338ca;padding:18px;border-radius:14px;margin-bottom:18px}}.brand{{font-size:10pt;font-weight:700;color:#0f766e;letter-spacing:1px}}h1{{font-size:27pt;color:#312e81;margin:8px 0}}h2{{font-size:19pt;color:#4338ca;margin-top:20px;break-after:avoid;page-break-after:avoid}}h3{{font-size:15pt;color:#0f766e;break-after:avoid;page-break-after:avoid}}h4{{font-size:13pt;color:#4338ca;break-after:avoid;page-break-after:avoid}}.badge{{display:inline-block;border:2px solid #10b981;background:#ecfdf5;color:#065f46;padding:5px 10px;font-weight:700}}.diagram{{border:1px solid #c7d2fe;padding:14px;margin:14px 0}}.diagram svg{{width:92%;height:auto;display:block;margin:auto}}code{{background:#ede9fe;color:#5b21b6;padding:2px 4px}}.math{{font-family:"DejaVu Sans",Arial,sans-serif;font-weight:600;color:#312e81}}.frac{{display:inline-flex;vertical-align:middle;flex-direction:column;text-align:center;line-height:1.05;margin:0 .12em}}.frac>span:first-child{{border-bottom:1px solid currentColor;padding:0 .12em}}a{{color:#3730a3}}li{{margin-bottom:5px}}p{{margin:6px 0 10px;orphans:2;widows:2}}</style></head><body><div class="cover"><div class="brand">EXAM SAATHI AI - VERIFIED ANSWER ENGINE v{ENGINE_VERSION}</div><h1>{title}</h1><span class="badge">{status}</span></div><div class="diagram"><h2>Question-Specific Concept Diagram</h2>{svg}<p><strong>PDF note:</strong> This is the clear static frame. Open the HTML guide for animation.</p></div>{body}</body></html>'''
 
 
 def _write_pdf_from_html(html_text: str, pdf_path: Path) -> None:
     writer = pymupdf.DocumentWriter(str(pdf_path))
-    story = pymupdf.Story(html=html_text)
+    font_archive = pymupdf.Archive(str(BASE_DIR)) if INTER_FONT_PATH.exists() else None
+    story = pymupdf.Story(html=html_text, archive=font_archive)
     page_box = pymupdf.Rect(0, 0, 595, 842)
     content_box = pymupdf.Rect(38, 38, 557, 804)
     more = 1

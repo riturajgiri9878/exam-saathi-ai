@@ -24,4 +24,4 @@ class ExamState(TypedDict, total=False):
     html_file: str
     pdf_file: str
     workflow_events: list[str]
-
+    generate_artifacts: bool

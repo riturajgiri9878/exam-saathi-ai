@@ -1,4 +1,4 @@
-"""Agentic orchestration layer for Exam Saathi v5.1.
+"""Agentic orchestration layer for Exam Saathi v5.2.
 
 The graph keeps the proven answer engine as the subject-solving tool and adds
 state, routing, deterministic verification, bounded retry, checkpoint memory,
@@ -17,6 +17,7 @@ from exam_prompts import prepare_intake
 from exam_state import ExamState
 from exam_tools import generate_visual_pack, plan_question, solve_with_verified_engine
 from exam_verifier import inspect_answer
+from fast_answer import try_fast_answer
 
 
 GraphSolveFn = Callable[..., dict[str, Any]]
@@ -32,7 +33,7 @@ def configure_langsmith_privacy() -> None:
     if _truthy("LANGSMITH_TRACING") and not _truthy("EXAM_SAATHI_TRACE_CONTENT"):
         os.environ.setdefault("LANGSMITH_HIDE_INPUTS", "true")
         os.environ.setdefault("LANGSMITH_HIDE_OUTPUTS", "true")
-    os.environ.setdefault("LANGSMITH_PROJECT", "exam-saathi-v5-1")
+    os.environ.setdefault("LANGSMITH_PROJECT", "exam-saathi-v5-2")
 
 
 configure_langsmith_privacy()
@@ -109,14 +110,23 @@ class ExamSaathiWorkflow:
         force_web = bool(state.get("force_web"))
         if retry_count and state.get("route", {}).get("use_web"):
             force_web = True
-        answer = self.solve_fn(
-            state["question"],
-            language=state.get("language", "Hinglish"),
-            rag_context=state.get("rag_context"),
-            force_web=force_web,
-            subject_override=state.get("subject_override"),
-            conversation_history=state.get("chat_history"),
-        )
+        answer = None
+        if retry_count == 0:
+            answer = try_fast_answer(
+                state["question"],
+                state.get("language", "Hinglish"),
+                state.get("subject", "General Studies"),
+                state.get("route", {}),
+            )
+        if answer is None:
+            answer = self.solve_fn(
+                state["question"],
+                language=state.get("language", "Hinglish"),
+                rag_context=state.get("rag_context"),
+                force_web=force_web,
+                subject_override=state.get("subject_override"),
+                conversation_history=state.get("chat_history"),
+            )
         evidence = list(state.get("rag_context") or [])
         retrieval_engine = str(evidence[0].get("retrieval_engine") or "") if evidence else ""
         answer["agentic_workflow"] = {
@@ -125,7 +135,10 @@ class ExamSaathiWorkflow:
             "thread_memory": True,
             "retrieval_engine": retrieval_engine,
         }
-        label = "Answer engine completed" if retry_count == 0 else f"Retry {retry_count} completed"
+        label = (
+            "Instant local answer completed" if answer.get("fast_path") else
+            ("Answer engine completed" if retry_count == 0 else f"Retry {retry_count} completed")
+        )
         if retrieval_engine:
             label += f" with {retrieval_engine}"
         return {"answer": answer, "workflow_events": self._events(state, label)}
@@ -173,6 +186,12 @@ class ExamSaathiWorkflow:
         }
 
     def _artifacts(self, state: ExamState) -> dict[str, Any]:
+        if not state.get("generate_artifacts", True):
+            return {
+                "html_file": "",
+                "pdf_file": "",
+                "workflow_events": self._events(state, "Visual pack deferred until answer display"),
+            }
         html_file, pdf_file = self.artifact_fn(state["answer"])
         return {
             "html_file": html_file,
@@ -185,7 +204,7 @@ class ExamSaathiWorkflow:
         register_thread(resolved_thread_id)
         config = {
             "configurable": {"thread_id": resolved_thread_id},
-            "tags": ["exam-saathi", "v5.1", "student-question"],
+            "tags": ["exam-saathi", "v5.2", "student-question"],
             "metadata": {"workflow": "agentic-learning-graph", "content_logged": False},
         }
         return self.graph.invoke(payload, config=config)
@@ -202,6 +221,7 @@ def run_exam_graph(
     subject_override: str | None = None,
     chat_history: list[dict[str, Any]] | None = None,
     thread_id: str | None = None,
+    generate_artifacts: bool = True,
 ) -> ExamState:
     return DEFAULT_WORKFLOW.invoke(
         {
@@ -212,6 +232,7 @@ def run_exam_graph(
             "subject_override": subject_override,
             "chat_history": list(chat_history or []),
             "workflow_events": [],
+            "generate_artifacts": bool(generate_artifacts),
         },
         thread_id=thread_id,
     )

@@ -31,7 +31,7 @@ from urllib.request import Request, urlopen
 import pymupdf
 
 
-ENGINE_VERSION = "5.1.0"
+ENGINE_VERSION = "5.2.0"
 ANSWER_PROVIDER = os.environ.get("ANSWER_PROVIDER", "auto").strip().lower()
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
 GROQ_REASONING_MODEL = os.environ.get(
@@ -1268,6 +1268,22 @@ def solve_question(
 def answer_markdown(answer: dict[str, Any]) -> str:
     status_icons = {"VERIFIED": "✅", "REVIEW_NEEDED": "⚠️", "INSUFFICIENT": "🛑"}
     status = answer.get("verification_status", "REVIEW_NEEDED")
+    if answer.get("fast_path_type") == "arithmetic":
+        lines = [
+            f"# {answer.get('title', 'Instant Calculation')}",
+            "",
+            answer.get("direct_answer", ""),
+            "",
+            "## Steps",
+            "",
+        ]
+        for item in answer.get("steps", []):
+            lines.extend([f"**{item.get('heading', 'Step')}:** {item.get('body', '')}", ""])
+        lines.extend([
+            f"✅ **Locally verified** · Confidence: **{answer.get('confidence', 100)}%** · "
+            "No AI quota or web search used.",
+        ])
+        return "\n".join(lines)
     lines = [
         f"# {answer.get('title', 'Exam Saathi Answer')}",
         "",

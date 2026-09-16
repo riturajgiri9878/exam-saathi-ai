@@ -5,6 +5,8 @@ from __future__ import annotations
 import html
 import json
 import os
+import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -21,8 +23,10 @@ from answer_engine import (
     ENGINE_VERSION,
     SUPPORTED_LANGUAGES,
     answer_markdown,
+    create_answer_artifacts,
 )
 from exam_graph import run_exam_graph
+from fast_answer import fast_answer_available
 
 from core import (
     SECURITY_GUARD,
@@ -394,42 +398,124 @@ def _verification_panel(answer: dict[str, Any]) -> str:
     )
 
 
+def progressive_answer_frames(markdown: str, target_characters: int = 520) -> list[str]:
+    """Build stable Markdown frames without exposing half-written syntax."""
+    paragraphs = [part.strip() for part in str(markdown or "").split("\n\n") if part.strip()]
+    if not paragraphs:
+        return [""]
+    frames: list[str] = []
+    visible: list[str] = []
+    pending_size = 0
+    for paragraph in paragraphs:
+        visible.append(paragraph)
+        pending_size += len(paragraph)
+        if pending_size >= max(160, target_characters) or paragraph.startswith("## "):
+            frames.append("\n\n".join(visible))
+            pending_size = 0
+    final = "\n\n".join(visible)
+    if not frames or frames[-1] != final:
+        frames.append(final)
+    return frames
+
+
+def _working_message(elapsed: float, local_fast: bool) -> str:
+    if local_fast:
+        return "⚡ Running the safe local calculator…"
+    if elapsed < 3:
+        return "🟡 Understanding the question and choosing tools…"
+    if elapsed < 12:
+        return "🧠 Building the answer…"
+    if elapsed < 35:
+        return "🔵 Checking reasoning and accuracy…"
+    return "⏳ The provider is taking longer than usual; a configured backup will be tried automatically…"
+
+
 def quick_solver_ui(
     question, history, language, subject_choice, allow_web, analysis,
     conversations, active_chat_id,
     request: gr.Request,
 ):
+    base_history = list(history or [])
+    safe_question = str(question or "").strip()
+    chat_id = str(active_chat_id or uuid4().hex)
     try:
         session_id = getattr(getattr(request, "client", None), "host", "anonymous")
         safe_question = SECURITY_GUARD.check(question, session_id)
-        rag_context = _question_context(safe_question, analysis)
-        chat_id = str(active_chat_id or uuid4().hex)
-        graph_result = run_exam_graph(
-            safe_question,
-            language=language,
-            rag_context=rag_context,
-            force_web=bool(allow_web),
-            subject_override=subject_choice,
-            chat_history=list(history or []),
-            thread_id=chat_id,
+        local_fast = fast_answer_available(safe_question)
+        pending_history = base_history + [
+            {"role": "user", "content": safe_question},
+            {"role": "assistant", "content": _working_message(0, local_fast)},
+        ]
+        current_choices = [
+            (item.get("title", "Question"), item.get("id", ""))
+            for item in (conversations or [])
+        ]
+        yield (
+            pending_history, "", _working_message(0, local_fast), None, None,
+            "Answer first; visual files will be prepared afterwards.",
+            conversations or [], chat_id, gr.update(choices=current_choices, value=active_chat_id or None),
         )
+
+        rag_context = [] if local_fast else _question_context(safe_question, analysis)
+        started = time.monotonic()
+        with ThreadPoolExecutor(max_workers=1, thread_name_prefix="exam-answer") as executor:
+            future = executor.submit(
+                run_exam_graph,
+                safe_question,
+                language,
+                rag_context,
+                bool(allow_web),
+                subject_choice,
+                base_history,
+                chat_id,
+                False,
+            )
+            while not future.done():
+                elapsed = time.monotonic() - started
+                message = _working_message(elapsed, local_fast)
+                pending_history[-1] = {"role": "assistant", "content": message}
+                yield (
+                    pending_history, "", message, None, None,
+                    "Answer first; visual files will be prepared afterwards.",
+                    conversations or [], chat_id, gr.update(choices=current_choices, value=active_chat_id or None),
+                )
+                time.sleep(0.8)
+            graph_result = future.result()
+
         answer = graph_result["answer"]
         rendered = answer_markdown(answer)
-        updated = list(history or [])
-        updated.extend([
-            {"role": "user", "content": safe_question},
-            {"role": "assistant", "content": rendered},
-        ])
-        html_file = graph_result["html_file"]
-        pdf_file = graph_result["pdf_file"]
+        verification = _verification_panel(answer)
+        delay = max(0, min(150, int(os.environ.get("STREAM_CHUNK_DELAY_MS", "35")))) / 1000
+        updated = base_history + [{"role": "user", "content": safe_question}]
+        for frame in progressive_answer_frames(rendered):
+            frame_history = updated + [{"role": "assistant", "content": frame}]
+            yield (
+                frame_history, "", verification, None, None,
+                "✅ Answer ready. Preparing the colorful PDF and animated HTML…",
+                conversations or [], chat_id, gr.update(choices=current_choices, value=active_chat_id or None),
+            )
+            if delay:
+                time.sleep(delay)
+        updated.append({"role": "assistant", "content": rendered})
+
+        with ThreadPoolExecutor(max_workers=1, thread_name_prefix="exam-visual") as executor:
+            visual_future = executor.submit(create_answer_artifacts, answer)
+            while not visual_future.done():
+                yield (
+                    updated, "", verification, None, None,
+                    "🎨 Answer is usable now; visual downloads are being prepared…",
+                    conversations or [], chat_id, gr.update(choices=current_choices, value=active_chat_id or None),
+                )
+                time.sleep(0.6)
+            html_file, pdf_file = visual_future.result()
+
         graph_events = graph_result.get("workflow_events", [])
         status = (
-            f"✅ Agentic workflow complete ({len(graph_events)} steps). "
+            f"✅ Answer and visual pack complete ({len(graph_events)} workflow steps). "
             f"Fresh visual pack created for this exact question. "
             f"PDF is static/printable; HTML contains safe offline animation. "
             f"Files are unique, so an older answer cannot be reused from cache."
         )
-        verification = _verification_panel(answer)
         saved = list(conversations or [])
         existing = next((item for item in saved if item.get("id") == chat_id), None)
         title = (
@@ -449,14 +535,21 @@ def quick_solver_ui(
         saved = [record] + [item for item in saved if item.get("id") != chat_id]
         saved = saved[:25]
         choices = [(item.get("title", "Question"), item.get("id", "")) for item in saved]
-        return (
+        yield (
             updated, "", verification, pdf_file, html_file, status,
             saved, chat_id, gr.update(choices=choices, value=chat_id),
         )
     except Exception as error:
-        return (
-            gr.skip(), gr.skip(), '❌ ' + html.escape(str(error)), None, None, '',
-            gr.skip(), gr.skip(), gr.skip(),
+        error_text = '❌ ' + html.escape(str(error))
+        error_history = base_history
+        if safe_question:
+            error_history = base_history + [
+                {"role": "user", "content": safe_question},
+                {"role": "assistant", "content": error_text},
+            ]
+        yield (
+            error_history, "", error_text, None, None, '',
+            conversations or [], active_chat_id or "", gr.skip(),
         )
 
 

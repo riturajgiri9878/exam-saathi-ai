@@ -1179,6 +1179,216 @@ html, body {
     .exam-header .logout-button, .exam-header .auth-warning { margin-top: 8px !important; }
     .chat-home-hero { margin-top: 10px; }
 }
+
+/* Exam Saathi v5.2 — Midnight Sky
+   One dark, high-contrast palette across the complete student experience. */
+:root, .dark,
+.gradio-container, .gradio-container.dark, .dark .gradio-container {
+    color-scheme: dark !important;
+    --body-background-fill: #0d0914 !important;
+    --body-text-color: #f7f7fb !important;
+    --background-fill-primary: #141218 !important;
+    --background-fill-secondary: #1c1a20 !important;
+    --block-background-fill: #16141b !important;
+    --block-label-background-fill: #222027 !important;
+    --block-label-text-color: #f7f7fb !important;
+    --block-title-text-color: #f7f7fb !important;
+    --input-background-fill: #232323 !important;
+    --input-background-fill-focus: #292929 !important;
+    --input-text-color: #f8f8fb !important;
+    --link-text-color: #8cc8ff !important;
+    --button-primary-background-fill: #86c5ff !important;
+    --button-primary-background-fill-hover: #a5d4ff !important;
+    --button-primary-text-color: #09111a !important;
+    --button-secondary-background-fill: #26232b !important;
+    --button-secondary-background-fill-hover: #322e39 !important;
+    --button-secondary-text-color: #f7f7fb !important;
+    --border-color-primary: #38333f !important;
+    --loader-color: #86c5ff !important;
+    --color-accent: #86c5ff !important;
+    background: #0d0914 !important;
+    color: #f7f7fb !important;
+}
+html, body {
+    background: #0d0914 !important;
+    background-image: radial-gradient(circle at 50% -25%, #21182d 0, #0d0914 42%, #0b0810 100%) !important;
+    background-attachment: fixed !important;
+}
+.gradio-container {
+    background: transparent !important;
+    color: #f7f7fb !important;
+}
+.study-sky { display: none !important; }
+.exam-header {
+    background: linear-gradient(115deg, #15111d, #21172d 56%, #152536) !important;
+    color: #f7f7fb !important;
+    border: 1px solid #38333f !important;
+    box-shadow: 0 14px 34px rgba(0,0,0,.34) !important;
+}
+.exam-header h1, .exam-header h2, .exam-header p,
+.exam-header strong { color: #f7f7fb !important; }
+.logout-button, .auth-warning {
+    background: #23202a !important;
+    color: #f7f7fb !important;
+    border: 1px solid #45404c !important;
+}
+#chat-history-sidebar {
+    background: #0b0a0f !important;
+    border-right: 1px solid #302c36 !important;
+}
+#chat-history-sidebar .sidebar-brand,
+#chat-history-sidebar label,
+#chat-history-sidebar .prose,
+#chat-history-sidebar .prose :is(p,li,strong) { color: #f7f7fb !important; }
+#chat-history-sidebar button.primary {
+    background: #86c5ff !important;
+    color: #09111a !important;
+    border-color: #86c5ff !important;
+}
+.chat-home-hero h1 { color: #ffffff !important; }
+.chat-home-hero p { color: #c8c3cf !important; }
+.chat-composer {
+    background: #030303 !important;
+    border: 1px solid #2f2d33 !important;
+    box-shadow: 0 16px 34px rgba(0,0,0,.34) !important;
+}
+.gradio-container .exam-card,
+.gradio-container .security-card,
+.gradio-container .warning-card,
+.exam-card, .security-card, .warning-card {
+    background: #16141b !important;
+    color: #f7f7fb !important;
+    border: 1px solid #393440 !important;
+    box-shadow: 0 8px 22px rgba(0,0,0,.24) !important;
+}
+.gradio-container .security-card { border-left: 4px solid #51d6a1 !important; }
+.gradio-container .warning-card { border-left: 4px solid #f4b860 !important; }
+.gradio-container .prose,
+.gradio-container .prose :is(p,li,strong,em,span,blockquote),
+.gradio-container label,
+.gradio-container label span,
+.gradio-container summary,
+.gradio-container .markdown,
+.gradio-container .markdown :is(p,li,strong,em,span) {
+    color: #f7f7fb !important;
+}
+.gradio-container .prose :is(h1,h2,h3,h4,h5,h6),
+.gradio-container .markdown :is(h1,h2,h3,h4,h5,h6) {
+    color: #9fd2ff !important;
+}
+.gradio-container :is(input,textarea,select),
+#ocr-review, #ocr-review > div, #ocr-review textarea {
+    background: #232323 !important;
+    color: #f8f8fb !important;
+    border-color: #3b3940 !important;
+    caret-color: #9fd2ff !important;
+}
+.gradio-container :is(input,textarea)::placeholder { color: #b9b5bf !important; }
+.primary-button, .gradio-container button.primary {
+    background: #86c5ff !important;
+    color: #09111a !important;
+    border-color: #86c5ff !important;
+    box-shadow: none !important;
+}
+.primary-button :is(span,p,svg),
+.gradio-container button.primary :is(span,p,svg) { color: #09111a !important; }
+.gradio-container button.secondary {
+    background: #26232b !important;
+    color: #f7f7fb !important;
+    border-color: #3b3742 !important;
+}
+#home-attach-button {
+    background: #171d24 !important;
+    color: #9fd2ff !important;
+    border: 1px solid #375875 !important;
+}
+#home-attach-button :is(span,p,svg) { color: #9fd2ff !important; }
+#quick-solver-chat, #quick-solver-chat .wrap,
+#quick-solver-chat .bubble-wrap, #quick-solver-chat .message-wrap {
+    background: #0d0914 !important;
+    color: #f7f7fb !important;
+}
+#quick-solver-chat .message,
+#quick-solver-chat [data-testid="bot"] {
+    background: #17151c !important;
+    color: #f7f7fb !important;
+    border-color: #34303a !important;
+}
+#quick-solver-chat .message.user,
+#quick-solver-chat [data-testid="user"] {
+    background: #25222a !important;
+    color: #ffffff !important;
+    border-color: #403b46 !important;
+}
+#quick-solver-chat .prose,
+#quick-solver-chat .prose :is(p,li,h1,h2,h3,h4,strong,em,span) {
+    color: #f7f7fb !important;
+}
+.gradio-container .generating,
+.gradio-container .generating > div,
+.gradio-container .generating textarea,
+.gradio-container .generating .wrap,
+.gradio-container .generating .file-preview,
+.gradio-container .generating .file-preview * {
+    background: #17151c !important;
+    color: #f7f7fb !important;
+}
+.gradio-container .eta-bar,
+.gradio-container .progress-level,
+.gradio-container .progress-level-inner {
+    background: #24212a !important;
+    color: #f7f7fb !important;
+}
+.gradio-container .meta-text,
+.gradio-container .meta-text-center,
+.gradio-container .generating span { color: #c8c3cf !important; }
+#study-upload, #study-upload > div, #study-upload .wrap,
+#study-upload .file-preview, #study-upload .file-preview *,
+#study-upload .upload-container, #study-upload .upload-container *,
+#study-upload [data-testid="file"], #study-upload [data-testid="file"] *,
+.gradio-container .study-file,
+.gradio-container .study-file :is(div,table,thead,tbody,tr,td,th,a,button,span) {
+    background: #18161d !important;
+    color: #f7f7fb !important;
+}
+#study-upload :is(p,label,span,button,a),
+.gradio-container .study-file :is(p,label,span,button,a) { color: #dcecff !important; }
+#study-upload .progress-text, #study-upload .eta-bar,
+#study-upload .progress-level, #study-upload .progress-level-inner {
+    background: #24212a !important;
+    color: #f7f7fb !important;
+}
+#choose-study-files {
+    background: #86c5ff !important;
+    color: #09111a !important;
+    border-color: #86c5ff !important;
+}
+#choose-study-files :is(span,p,svg) { color: #09111a !important; }
+#diagram-gallery, #diagram-gallery > div { background: #18161d !important; color: #f7f7fb !important; }
+#diagram-gallery img { background: #f4f4f6 !important; }
+.gradio-container code { background: #27232e !important; color: #b9dcff !important; }
+.gradio-container a { color: #8cc8ff !important; }
+.gradio-container :is(button,a,input,summary,textarea,select):focus-visible {
+    outline: 3px solid #86c5ff !important;
+    outline-offset: 3px;
+}
+.gradio-container .tabs,
+.gradio-container [role="tablist"],
+.gradio-container [role="tabpanel"],
+.gradio-container .tabitem,
+.gradio-container .accordion {
+    background: transparent !important;
+    color: #f7f7fb !important;
+}
+.gradio-container [role="tab"] { color: #c9c5d0 !important; }
+.gradio-container [role="tab"][aria-selected="true"] {
+    color: #9fd2ff !important;
+    border-color: #86c5ff !important;
+}
+.download-accordion {
+    background: #141218 !important;
+    border-color: #34303a !important;
+}
 """
 
 

@@ -1309,6 +1309,61 @@ def semantic_search(query: str, chunks: list[dict[str, Any]], top_k: int = 3) ->
     return results
 
 
+def retrieve_uploaded_context(
+    query: str,
+    chunks: list[dict[str, Any]],
+    top_k: int = 6,
+) -> list[dict[str, Any]]:
+    """Use LlamaIndex for uploaded evidence with a zero-breakage fallback.
+
+    The fallback is intentional: a missing optional package, low-memory Render
+    restart or feature flag must never stop a student from asking a question.
+    """
+    llama_matches: list[dict[str, Any]] = []
+    try:
+        from llama_rag import retrieve_with_llamaindex
+
+        llama_matches = retrieve_with_llamaindex(query, chunks, top_k=top_k)
+    except Exception:
+        llama_matches = []
+
+    semantic_matches = semantic_search(query, chunks, top_k=top_k)
+    if not llama_matches:
+        for item in semantic_matches:
+            item.setdefault("retrieval_engine", "Exam Saathi semantic fallback")
+        return semantic_matches
+
+    # Hybrid retrieval protects multilingual/semantic quality while LlamaIndex
+    # supplies structured ingestion, vector indexing and metadata-preserving
+    # retrieval.  Identical evidence found by both routes receives a small,
+    # bounded agreement bonus.
+    merged: dict[tuple[str, int, str], dict[str, Any]] = {}
+    for origin, matches in (("llama", llama_matches), ("semantic", semantic_matches)):
+        for item in matches:
+            key = (
+                str(item.get("source_name") or "Uploaded material"),
+                int(item.get("page_number") or 1),
+                str(item.get("text") or "").strip(),
+            )
+            if not key[2]:
+                continue
+            candidate = merged.setdefault(key, dict(item, _origins=set()))
+            candidate["score"] = max(float(candidate.get("score") or 0), float(item.get("score") or 0))
+            candidate["_origins"].add(origin)
+
+    results: list[dict[str, Any]] = []
+    for item in merged.values():
+        origins = item.pop("_origins")
+        agreement_bonus = 0.05 if len(origins) == 2 else 0.0
+        item["score"] = round(min(1.0, float(item.get("score") or 0) + agreement_bonus), 4)
+        item["retrieval_engine"] = "LlamaIndex + semantic hybrid"
+        results.append(item)
+    results.sort(key=lambda item: float(item.get("score") or 0), reverse=True)
+    for rank, item in enumerate(results[:top_k], start=1):
+        item["rank"] = rank
+    return results[:top_k]
+
+
 def mask_personal_information(text: str) -> str:
     text = re.sub(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+", "[EMAIL MASKED]", text)
     text = re.sub(r"(?<!\d)(?:\+?91[-\s]?)?[6-9]\d{9}(?!\d)", "[PHONE MASKED]", text)

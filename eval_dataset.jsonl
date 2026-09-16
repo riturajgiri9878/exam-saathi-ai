@@ -1,0 +1,5 @@
+{"id":"static-gk","question":"What is the national bird of India?","expected_route":{"subject":"General Studies","use_web":false,"use_code":false}}
+{"id":"current-office-holder","question":"Who is the Prime Minister of India in 2026?","expected_route":{"subject":"Civics / Current Affairs","use_web":true,"source_policy":"official_government"}}
+{"id":"hard-mathematics","question":"Find the exact value of (sqrt(18)/(sqrt(12)-sqrt(6)))^10","expected_route":{"subject":"Mathematics","use_code":true}}
+{"id":"physical-geography","question":"Explain the Atacama thermal inversion and Andes rain shadow.","expected_route":{"subject":"Geography","geography_type":"Physical Geography","visual_type":"cross_section"}}
+{"id":"organic-chemistry","question":"Identify an aromatic compound using iodoform, Tollens and reductive ozonolysis tests.","expected_route":{"subject":"Chemistry","use_code":false}}

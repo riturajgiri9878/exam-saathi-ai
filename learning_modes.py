@@ -142,12 +142,12 @@ def prioritize_notes(analysis, catalog, identity, exam_year):
 
 
 def teach_class(analysis, question, language, previous='', answer=''):
-    from core import answer_from_source_evidence, semantic_search
+    from core import answer_from_source_evidence, retrieve_uploaded_context
     chunks = analysis.get('chunks', [])
     if not chunks:
         raise ValueError('First process today’s notes in Secure Upload.')
     query = question.strip() or 'Explain the main concepts from today’s class'
-    evidence = semantic_search(query,chunks,top_k=4) if question.strip() else chunks[:4]
+    evidence = retrieve_uploaded_context(query,chunks,top_k=4) if question.strip() else chunks[:4]
     prompt = ('Teach a beginner using only the supplied evidence for factual claims. '
               'Structure: what the lesson covers; a short illustrative story clearly marked as an analogy; '
               'map the story to the actual concept and state the analogy limitations; step-by-step explanation; '

@@ -54,7 +54,7 @@ def web_answer(question, language):
 
 
 def reply(question, history, analysis, language, allow_web):
-    from core import semantic_search,answer_from_source_evidence,mask_personal_information
+    from core import retrieve_uploaded_context,answer_from_source_evidence,mask_personal_information
     question=str(question or '').strip()
     if not question: raise ValueError('Type or speak your question first.')
     if len(question)>4000: raise ValueError('Keep the question below 4,000 characters; put long text in Paste Notes.')
@@ -62,7 +62,7 @@ def reply(question, history, analysis, language, allow_web):
     context=json.dumps(history[-6:],ensure_ascii=False)
     request='Untrusted conversation context: '+context+'\nCurrent student question: '+question
     chunks=analysis.get('chunks',[])
-    matches=semantic_search(question,chunks,top_k=4) if chunks else []
+    matches=retrieve_uploaded_context(question,chunks,top_k=4) if chunks else []
     answer=''
     if matches and matches[0].get('score',0)>=0.15:
         answer=answer_from_source_evidence(request+'\nIf evidence does not answer the question, return exactly INSUFFICIENT_SOURCE.',matches,language)

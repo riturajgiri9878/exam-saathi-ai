@@ -31,7 +31,7 @@ from urllib.request import Request, urlopen
 import pymupdf
 
 
-ENGINE_VERSION = "4.5.1"
+ENGINE_VERSION = "5.1.0"
 ANSWER_PROVIDER = os.environ.get("ANSWER_PROVIDER", "auto").strip().lower()
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
 GROQ_REASONING_MODEL = os.environ.get(
@@ -317,6 +317,7 @@ def _build_solver_prompt(
     language: str,
     route: ToolRoute,
     rag_text: str,
+    conversation_text: str = "No earlier conversation supplied.",
 ) -> str:
     return f"""You are Exam Saathi's senior teacher and careful problem solver.
 
@@ -332,6 +333,9 @@ FRESHNESS REQUIRED: {route.freshness_required}
 CURRENT DATE (UTC): {time.strftime('%Y-%m-%d', time.gmtime())}
 UPLOADED EVIDENCE:
 {rag_text}
+
+RECENT CONVERSATION MEMORY:
+{conversation_text}
 
 Non-negotiable rules:
 1. First test whether the question's premise and given data are internally consistent.
@@ -367,6 +371,7 @@ def _build_review_prompt(
     route: ToolRoute,
     rag_text: str,
     draft: dict[str, Any],
+    conversation_text: str = "No earlier conversation supplied.",
 ) -> str:
     return f"""Act as an independent examiner and fact-checker. Correct the draft below before
 it reaches a student. Do not merely agree with it.
@@ -380,6 +385,9 @@ GEOGRAPHY TYPE: {route.geography_type or 'Not applicable'}
 SOURCE POLICY: {route.source_policy}
 UPLOADED EVIDENCE:
 {rag_text}
+
+RECENT CONVERSATION MEMORY:
+{conversation_text}
 
 DRAFT JSON:
 {json.dumps(draft, ensure_ascii=False)}
@@ -1136,6 +1144,21 @@ def _dedupe_sources(items: list[dict[str, str]]) -> list[dict[str, str]]:
     return output
 
 
+def _conversation_block(history: list[dict[str, Any]] | None) -> str:
+    """Keep a small recent-memory window without exploding provider token use."""
+    if not history:
+        return "No earlier conversation supplied."
+    lines: list[str] = []
+    for item in history[-6:]:
+        if not isinstance(item, dict):
+            continue
+        role = str(item.get("role", "user")).strip().title()
+        content = re.sub(r"\s+", " ", str(item.get("content", ""))).strip()
+        if content:
+            lines.append(f"{role}: {content[:700]}")
+    return "\n".join(lines)[:3500] or "No earlier conversation supplied."
+
+
 def solve_question(
     question: str,
     language: str = "Hinglish",
@@ -1143,6 +1166,7 @@ def solve_question(
     generate_fn: Callable[[str, bool, bool], tuple[str, list[dict[str, str]], bool, str]] | None = None,
     force_web: bool = False,
     subject_override: str | None = None,
+    conversation_history: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Solve, independently review and gate one question."""
     question = _clean_question(question)
@@ -1158,11 +1182,14 @@ def solve_question(
     if force_web:
         route.use_web = True
     rag_text, rag_sources = _rag_block(rag_context)
+    conversation_text = _conversation_block(conversation_history)
     generator = generate_fn or _default_generate
 
     try:
         draft_text, draft_sources, draft_code, draft_model = generator(
-            _build_solver_prompt(question, language, route, rag_text), route.use_web, route.use_code
+            _build_solver_prompt(question, language, route, rag_text, conversation_text),
+            route.use_web,
+            route.use_code,
         )
         draft = _normalise_payload(_parse_json(draft_text), route.subject, language)
     except Exception:
@@ -1198,7 +1225,7 @@ def solve_question(
     review_model = "review-unavailable"
     try:
         review_text, review_sources, review_code, review_model = generator(
-            _build_review_prompt(question, language, route, rag_text, draft),
+            _build_review_prompt(question, language, route, rag_text, draft, conversation_text),
             route.use_web,
             route.use_code,
         )

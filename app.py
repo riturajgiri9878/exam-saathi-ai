@@ -21,9 +21,8 @@ from answer_engine import (
     ENGINE_VERSION,
     SUPPORTED_LANGUAGES,
     answer_markdown,
-    create_answer_artifacts,
-    solve_question,
 )
+from exam_graph import run_exam_graph
 
 from core import (
     SECURITY_GUARD,
@@ -31,6 +30,7 @@ from core import (
     analyze_files,
     answer_from_source_evidence,
     semantic_search,
+    retrieve_uploaded_context,
     transcribe_study_audio,
 )
 from study_features import (
@@ -359,7 +359,7 @@ def _question_context(question: str, analysis: dict[str, Any]) -> list[dict[str,
     if not chunks:
         return []
     try:
-        return semantic_search(question, chunks, top_k=6)
+        return retrieve_uploaded_context(question, chunks, top_k=6)
     except Exception:
         # The answer engine can still solve from general knowledge/web tools.
         return []
@@ -376,6 +376,11 @@ def _verification_panel(answer: dict[str, Any]) -> str:
         checks.append("independent calculation")
     if route.get("uploaded_evidence"):
         checks.append("uploaded notes")
+    if answer.get("agentic_workflow"):
+        checks.append("LangGraph quality gate")
+        retrieval_engine = str(answer["agentic_workflow"].get("retrieval_engine") or "")
+        if "LlamaIndex" in retrieval_engine:
+            checks.append("LlamaIndex document retrieval")
     check_text = ", ".join(checks) if checks else "independent reviewer"
     providers = ", ".join(
         str(model) for model in answer.get("models", [])
@@ -398,27 +403,33 @@ def quick_solver_ui(
         session_id = getattr(getattr(request, "client", None), "host", "anonymous")
         safe_question = SECURITY_GUARD.check(question, session_id)
         rag_context = _question_context(safe_question, analysis)
-        answer = solve_question(
+        chat_id = str(active_chat_id or uuid4().hex)
+        graph_result = run_exam_graph(
             safe_question,
             language=language,
             rag_context=rag_context,
             force_web=bool(allow_web),
             subject_override=subject_choice,
+            chat_history=list(history or []),
+            thread_id=chat_id,
         )
+        answer = graph_result["answer"]
         rendered = answer_markdown(answer)
         updated = list(history or [])
         updated.extend([
             {"role": "user", "content": safe_question},
             {"role": "assistant", "content": rendered},
         ])
-        html_file, pdf_file = create_answer_artifacts(answer)
+        html_file = graph_result["html_file"]
+        pdf_file = graph_result["pdf_file"]
+        graph_events = graph_result.get("workflow_events", [])
         status = (
-            f"✅ Fresh visual pack created for this exact question. "
+            f"✅ Agentic workflow complete ({len(graph_events)} steps). "
+            f"Fresh visual pack created for this exact question. "
             f"PDF is static/printable; HTML contains safe offline animation. "
             f"Files are unique, so an older answer cannot be reused from cache."
         )
         verification = _verification_panel(answer)
-        chat_id = str(active_chat_id or uuid4().hex)
         saved = list(conversations or [])
         existing = next((item for item in saved if item.get("id") == chat_id), None)
         title = (
@@ -433,6 +444,7 @@ def quick_solver_ui(
             "pdf_file": pdf_file,
             "html_file": html_file,
             "visual_status": status,
+            "workflow_events": graph_events,
         }
         saved = [record] + [item for item in saved if item.get("id") != chat_id]
         saved = saved[:25]
@@ -1106,7 +1118,7 @@ with gr.Blocks(title="Exam Saathi AI") as demo:
         <div class="exam-header">
           <div class="header-copy">
             <h1>📘 EXAM SAATHI AI</h1>
-            <p><strong>Verified Multilingual Answer Engine · v{ENGINE_VERSION}</strong></p>
+            <p><strong>Agentic Learning Graph · Verified Multilingual Engine · v{ENGINE_VERSION}</strong></p>
           </div>
           {AUTH_CONTROL}
         </div>
@@ -1436,6 +1448,8 @@ with gr.Blocks(title="Exam Saathi AI") as demo:
 - Uploaded content is processed for the current app session.
 - Low-confidence scanned documents are sent to Google Gemini for OCR when GEMINI_API_KEY is configured.
 - Typed questions use automatic provider routing. Depending on configured keys, they may be sent to Groq, OpenAI, Gemini or Perplexity.
+- LangGraph controls question classification, answer generation, deterministic verification, bounded retry and human-review routing.
+- LangSmith tracing is optional and OFF unless `LANGSMITH_TRACING=true` is configured. Student inputs and outputs remain hidden unless an administrator explicitly enables trace content.
 - Current-fact questions automatically request web grounding. Perplexity Sonar is tried first when configured, followed by Groq/Gemini web tools; online sources and verification time are listed.
 - Geography SVGs are educational schematics unless exact source-backed geometry is available; they never claim surveyed boundary accuracy.
 - Recorded voice is sent to Google Gemini only when the student presses Convert Voice; it is used to create the question transcript.

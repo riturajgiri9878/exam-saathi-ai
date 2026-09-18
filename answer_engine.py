@@ -32,7 +32,7 @@ from urllib.request import Request, urlopen
 import pymupdf
 
 
-ENGINE_VERSION = "5.3.0"
+ENGINE_VERSION = "5.3.1"
 ANSWER_PROVIDER = os.environ.get("ANSWER_PROVIDER", "auto").strip().lower()
 FREE_PROVIDER_ONLY = os.environ.get(
     "EXAM_SAATHI_FREE_ONLY", "true"

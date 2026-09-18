@@ -1180,7 +1180,7 @@ html, body {
     .chat-home-hero { margin-top: 10px; }
 }
 
-/* Exam Saathi v5.3 — Midnight Sky
+/* Exam Saathi v5.3.1 — Midnight Sky
    One dark, high-contrast palette across the complete student experience. */
 :root, .dark,
 .gradio-container, .gradio-container.dark, .dark .gradio-container {
@@ -1389,6 +1389,90 @@ html, body {
     background: #141218 !important;
     border-color: #34303a !important;
 }
+
+/* v5.3.1 — Full Chapter contrast repair.
+   render_lesson() ships portable light-theme HTML for downloads. Inside the
+   Midnight app, this scoped layer converts only that lesson to accessible
+   dark cards, without changing exported HTML/PDF colors. */
+#chapter-lesson-output .chapter-guide {
+    color: #edf6ff !important;
+}
+#chapter-lesson-output .chapter-guide :is(p,li,span,strong,em,blockquote,figcaption,td) {
+    color: #edf6ff !important;
+}
+#chapter-lesson-output .chapter-guide :is(h1,h2,h3,h4,h5,h6) {
+    color: #9fd2ff !important;
+}
+#chapter-lesson-output .chapter-guide .lesson-banner {
+    background: linear-gradient(120deg, #171d24, #1b2430) !important;
+    border: 1px solid #375875 !important;
+}
+#chapter-lesson-output .chapter-guide .topic {
+    background: #17151c !important;
+    border-color: #3a3540 !important;
+    box-shadow: 0 8px 22px rgba(0,0,0,.24) !important;
+}
+#chapter-lesson-output .chapter-guide .story {
+    background: #2b2117 !important;
+    color: #ffe7b8 !important;
+    border-left-color: #f4b860 !important;
+}
+#chapter-lesson-output .chapter-guide .example {
+    background: #13251f !important;
+    color: #d9fff0 !important;
+    border-left-color: #51d6a1 !important;
+}
+#chapter-lesson-output .chapter-guide .tip {
+    background: #211a2e !important;
+    color: #eadfff !important;
+}
+#chapter-lesson-output .chapter-guide .refs {
+    color: #b7c5d7 !important;
+}
+#chapter-lesson-output .chapter-guide .diagram {
+    background: #121c27 !important;
+    border: 1px solid #375875 !important;
+}
+#chapter-lesson-output .chapter-guide .node {
+    background: #1c2732 !important;
+    color: #edf6ff !important;
+    border-color: #587a99 !important;
+}
+#chapter-lesson-output .chapter-guide :is(th,td) {
+    border-color: #45404c !important;
+}
+#chapter-lesson-output .chapter-guide th {
+    background: #252130 !important;
+    color: #b9dcff !important;
+}
+#chapter-lesson-output .chapter-guide td {
+    background: #18161d !important;
+}
+#chapter-lesson-output .chapter-guide details {
+    background: #17151c !important;
+    border-color: #3a3540 !important;
+}
+#chapter-lesson-output .chapter-guide summary {
+    color: #b9dcff !important;
+}
+#chapter-lesson-output .chapter-guide .warning {
+    background: #2d2315 !important;
+    color: #ffe3ad !important;
+    border-left: 4px solid #f4b860 !important;
+    border-radius: 8px !important;
+}
+#chapter-lesson-output .chapter-guide .warning strong {
+    color: #fff1ce !important;
+}
+#chapter-lesson-output .chapter-guide .coverage {
+    background: #171d24 !important;
+    color: #edf6ff !important;
+    border: 1px solid #375875 !important;
+}
+#chapter-lesson-output .chapter-guide .toc a,
+#chapter-lesson-output .chapter-guide a {
+    color: #9fd2ff !important;
+}
 """
 
 
@@ -1560,7 +1644,7 @@ with gr.Blocks(title="Exam Saathi AI") as demo:
             gr.Markdown('Full Chapter mode reads every extracted source section in order, not only the top search results. Longer chapters take multiple steps. Keep this page open; completed sections appear as they finish. A retry resumes the same notes, language and request.')
             teacher_start = gr.Button('📖 Build / Resume Full Chapter',variant='primary')
             teacher_progress = gr.Markdown()
-            teacher_output = gr.HTML()
+            teacher_output = gr.HTML(elem_id='chapter-lesson-output')
             teacher_download = gr.File(label='Download this detailed lesson as HTML',interactive=False,elem_classes=['study-file'])
             teacher_source_diagrams = gr.Gallery(label='Original source diagrams — click to zoom',columns=2,object_fit='contain')
             teacher_answer = gr.Textbox(label='Your answer — include the topic and question you are answering')

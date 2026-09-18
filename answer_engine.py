@@ -20,6 +20,7 @@ import html
 import json
 import os
 import re
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -31,8 +32,11 @@ from urllib.request import Request, urlopen
 import pymupdf
 
 
-ENGINE_VERSION = "5.2.0"
+ENGINE_VERSION = "5.3.0"
 ANSWER_PROVIDER = os.environ.get("ANSWER_PROVIDER", "auto").strip().lower()
+FREE_PROVIDER_ONLY = os.environ.get(
+    "EXAM_SAATHI_FREE_ONLY", "true"
+).strip().casefold() not in {"0", "false", "no", "off"}
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
 GROQ_REASONING_MODEL = os.environ.get(
     "GROQ_REASONING_MODEL", "openai/gpt-oss-120b"
@@ -54,14 +58,36 @@ PERPLEXITY_API_URL = "https://api.perplexity.ai/chat/completions"
 PERPLEXITY_MODEL = os.environ.get("PERPLEXITY_MODEL", "sonar").strip()
 OPENAI_API_URL = "https://api.openai.com/v1/chat/completions"
 OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "").strip()
+NVIDIA_API_URL = os.environ.get(
+    "NVIDIA_API_URL", "https://integrate.api.nvidia.com/v1/chat/completions"
+).strip()
+NVIDIA_MODEL = os.environ.get(
+    "NVIDIA_MODEL", "nvidia/nemotron-3.5-lightning-30b-a3b"
+).strip()
+OPENROUTER_API_URL = os.environ.get(
+    "OPENROUTER_API_URL", "https://openrouter.ai/api/v1/chat/completions"
+).strip()
+OPENROUTER_MODEL = os.environ.get("OPENROUTER_MODEL", "openrouter/free").strip()
+CLOUDFLARE_MODEL = os.environ.get(
+    "CLOUDFLARE_MODEL", "@cf/meta/llama-3.3-70b-instruct-fp8-fast"
+).strip()
 ANSWER_TIMEOUT_SECONDS = int(os.environ.get("ANSWER_TIMEOUT_SECONDS", "75"))
 GROQ_TIMEOUT_SECONDS = max(30, int(os.environ.get("GROQ_TIMEOUT_SECONDS", "60")))
+FREE_PROVIDER_TIMEOUT_SECONDS = max(
+    20, int(os.environ.get("FREE_PROVIDER_TIMEOUT_SECONDS", "45"))
+)
+PROVIDER_COOLDOWN_SECONDS = max(
+    10, int(os.environ.get("PROVIDER_COOLDOWN_SECONDS", "60"))
+)
 MAX_QUESTION_CHARACTERS = int(os.environ.get("MAX_QUESTION_CHARACTERS", "12000"))
 MAX_RAG_CHARACTERS = int(os.environ.get("MAX_RAG_CHARACTERS", "18000"))
 ARTIFACT_DIR = Path(os.environ.get("ANSWER_ARTIFACT_DIR", "/tmp/exam_saathi_answers"))
 BASE_DIR = Path(__file__).resolve().parent
 INTER_FONT_PATH = BASE_DIR / "Inter-Regular.ttf"
 INTER_BOLD_FONT_PATH = BASE_DIR / "Inter-Bold.ttf"
+
+_PROVIDER_COOLDOWN_UNTIL: dict[str, float] = {}
+_PROVIDER_COOLDOWN_LOCK = threading.Lock()
 
 
 SUPPORTED_LANGUAGES = [
@@ -511,11 +537,161 @@ def _provider_error_text(error: Exception) -> str:
         return "API key is missing, invalid, or not permitted"
     if isinstance(error, (TimeoutError, URLError)) or "timed out" in lowered or "timeout" in lowered:
         return "provider timed out"
+    if "503" in raw or "high demand" in lowered or "overloaded" in lowered:
+        return "provider is temporarily overloaded"
+    if any(code in raw for code in ("500", "502", "504")) or "service unavailable" in lowered:
+        return "provider is temporarily unavailable"
     if "404" in raw or "not_found" in lowered or "not found" in lowered:
         return "configured model is unavailable"
     return re.sub(
         r"(?i)(bearer\s+|api[_ -]?key[=: ]+)[^\s,;]+", r"\1[hidden]", raw
     )[:180]
+
+
+def _provider_cooldown_remaining(name: str) -> int:
+    """Avoid repeatedly calling a provider that just timed out or rejected quota."""
+    with _PROVIDER_COOLDOWN_LOCK:
+        remaining = _PROVIDER_COOLDOWN_UNTIL.get(name, 0.0) - time.monotonic()
+        if remaining <= 0:
+            _PROVIDER_COOLDOWN_UNTIL.pop(name, None)
+            return 0
+        return max(1, int(remaining))
+
+
+def _start_provider_cooldown(name: str, error: Exception) -> None:
+    reason = _provider_error_text(error)
+    if reason not in {
+        "free quota/rate limit reached",
+        "provider timed out",
+        "provider is temporarily overloaded",
+        "provider is temporarily unavailable",
+    }:
+        return
+    multiplier = 5 if reason == "free quota/rate limit reached" else 1
+    with _PROVIDER_COOLDOWN_LOCK:
+        _PROVIDER_COOLDOWN_UNTIL[name] = (
+            time.monotonic() + PROVIDER_COOLDOWN_SECONDS * multiplier
+        )
+
+
+def _chat_completion_content(value: dict[str, Any]) -> str:
+    """Read OpenAI-compatible responses, including Cloudflare's result wrapper."""
+    candidate = value
+    if not isinstance(candidate.get("choices"), list):
+        wrapped = candidate.get("result", {})
+        candidate = wrapped if isinstance(wrapped, dict) else {}
+    try:
+        return str(candidate["choices"][0]["message"].get("content", "")).strip()
+    except (KeyError, IndexError, TypeError, AttributeError):
+        return ""
+
+
+def _post_openai_compatible(
+    *,
+    url: str,
+    api_key: str,
+    model: str,
+    prompt: str,
+    provider_slug: str,
+    extra_headers: dict[str, str] | None = None,
+) -> tuple[str, list[dict[str, str]], bool, str]:
+    """Call a hosted free-tier provider through its OpenAI-compatible endpoint."""
+    payload = {
+        "model": model,
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0.1,
+        "max_tokens": 6500,
+    }
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+        "User-Agent": f"Exam-Saathi/{ENGINE_VERSION}",
+    }
+    headers.update(extra_headers or {})
+    request = Request(
+        url,
+        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        headers=headers,
+        method="POST",
+    )
+    with urlopen(request, timeout=FREE_PROVIDER_TIMEOUT_SECONDS) as response:
+        value = json.loads(response.read().decode("utf-8"))
+    content = _chat_completion_content(value)
+    if not content:
+        raise RuntimeError("empty model response")
+    return content, [], False, f"{provider_slug}:{model}"
+
+
+def _nvidia_generate(prompt: str, use_web: bool, use_code: bool) -> tuple[str, list[dict[str, str]], bool, str]:
+    """Use NVIDIA's hosted NIM developer endpoint as a free-tier fallback."""
+    del use_web, use_code  # NIM reasoning is not treated as live web/code verification.
+    api_key = os.environ.get("NVIDIA_API_KEY", "").strip()
+    model = os.environ.get("NVIDIA_MODEL", NVIDIA_MODEL).strip()
+    if not api_key:
+        raise RuntimeError("NVIDIA_API_KEY is not configured.")
+    if not model:
+        raise RuntimeError("NVIDIA_MODEL is not configured.")
+    try:
+        return _post_openai_compatible(
+            url=NVIDIA_API_URL,
+            api_key=api_key,
+            model=model,
+            prompt=prompt,
+            provider_slug="nvidia",
+        )
+    except Exception as error:
+        raise RuntimeError("NVIDIA unavailable: " + _provider_error_text(error)) from error
+
+
+def _openrouter_generate(prompt: str, use_web: bool, use_code: bool) -> tuple[str, list[dict[str, str]], bool, str]:
+    """Use OpenRouter's free-model router; model availability may rotate."""
+    del use_web, use_code
+    api_key = os.environ.get("OPENROUTER_API_KEY", "").strip()
+    model = os.environ.get("OPENROUTER_MODEL", OPENROUTER_MODEL).strip()
+    if not api_key:
+        raise RuntimeError("OPENROUTER_API_KEY is not configured.")
+    if not model:
+        raise RuntimeError("OPENROUTER_MODEL is not configured.")
+    extra_headers = {"X-Title": "Exam Saathi AI"}
+    referer = os.environ.get("OPENROUTER_SITE_URL", "").strip()
+    if referer:
+        extra_headers["HTTP-Referer"] = referer
+    try:
+        return _post_openai_compatible(
+            url=OPENROUTER_API_URL,
+            api_key=api_key,
+            model=model,
+            prompt=prompt,
+            provider_slug="openrouter",
+            extra_headers=extra_headers,
+        )
+    except Exception as error:
+        raise RuntimeError("OpenRouter unavailable: " + _provider_error_text(error)) from error
+
+
+def _cloudflare_generate(prompt: str, use_web: bool, use_code: bool) -> tuple[str, list[dict[str, str]], bool, str]:
+    """Use the Cloudflare Workers AI free allocation as the final free backup."""
+    del use_web, use_code
+    api_token = os.environ.get("CLOUDFLARE_API_TOKEN", "").strip()
+    account_id = os.environ.get("CLOUDFLARE_ACCOUNT_ID", "").strip()
+    model = os.environ.get("CLOUDFLARE_MODEL", CLOUDFLARE_MODEL).strip()
+    if not api_token:
+        raise RuntimeError("CLOUDFLARE_API_TOKEN is not configured.")
+    if not account_id:
+        raise RuntimeError("CLOUDFLARE_ACCOUNT_ID is not configured.")
+    if not model:
+        raise RuntimeError("CLOUDFLARE_MODEL is not configured.")
+    url = f"https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/v1/chat/completions"
+    try:
+        return _post_openai_compatible(
+            url=url,
+            api_key=api_token,
+            model=model,
+            prompt=prompt,
+            provider_slug="cloudflare",
+        )
+    except Exception as error:
+        raise RuntimeError("Cloudflare unavailable: " + _provider_error_text(error)) from error
 
 
 def _groq_generate(prompt: str, use_web: bool, use_code: bool) -> tuple[str, list[dict[str, str]], bool, str]:
@@ -717,32 +893,51 @@ def _openai_generate(prompt: str, use_web: bool, use_code: bool) -> tuple[str, l
 
 def _default_generate(prompt: str, use_web: bool, use_code: bool) -> tuple[str, list[dict[str, str]], bool, str]:
     """Route across optional providers without exposing secret-bearing raw errors."""
-    allowed = {"auto", "groq", "gemini", "perplexity", "openai"}
+    allowed = {
+        "auto", "groq", "nvidia", "openrouter", "cloudflare",
+        "gemini", "perplexity", "openai",
+    }
     provider = ANSWER_PROVIDER if ANSWER_PROVIDER in allowed else "auto"
     attempts: list[tuple[str, Callable[..., tuple[str, list[dict[str, str]], bool, str]]]] = []
     if provider == "auto":
         if use_web:
+            if not FREE_PROVIDER_ONLY:
+                attempts.append(("Perplexity", _perplexity_generate))
             attempts.extend([
-                ("Perplexity", _perplexity_generate),
                 ("Groq", _groq_generate),
                 ("Gemini", _gemini_generate),
-                ("OpenAI", _openai_generate),
+                ("NVIDIA", _nvidia_generate),
+                ("OpenRouter", _openrouter_generate),
+                ("Cloudflare", _cloudflare_generate),
             ])
+            if not FREE_PROVIDER_ONLY:
+                attempts.append(("OpenAI", _openai_generate))
         elif use_code:
             attempts.extend([
                 ("Groq", _groq_generate),
+                ("NVIDIA", _nvidia_generate),
+                ("OpenRouter", _openrouter_generate),
                 ("Gemini", _gemini_generate),
-                ("OpenAI", _openai_generate),
+                ("Cloudflare", _cloudflare_generate),
             ])
+            if not FREE_PROVIDER_ONLY:
+                attempts.append(("OpenAI", _openai_generate))
         else:
             attempts.extend([
                 ("Groq", _groq_generate),
-                ("OpenAI", _openai_generate),
+                ("NVIDIA", _nvidia_generate),
+                ("OpenRouter", _openrouter_generate),
+                ("Cloudflare", _cloudflare_generate),
                 ("Gemini", _gemini_generate),
             ])
+            if not FREE_PROVIDER_ONLY:
+                attempts.append(("OpenAI", _openai_generate))
     else:
         attempts.append({
             "groq": ("Groq", _groq_generate),
+            "nvidia": ("NVIDIA", _nvidia_generate),
+            "openrouter": ("OpenRouter", _openrouter_generate),
+            "cloudflare": ("Cloudflare", _cloudflare_generate),
             "gemini": ("Gemini", _gemini_generate),
             "perplexity": ("Perplexity", _perplexity_generate),
             "openai": ("OpenAI", _openai_generate),
@@ -750,27 +945,36 @@ def _default_generate(prompt: str, use_web: bool, use_code: bool) -> tuple[str, 
 
     errors: list[str] = []
     for name, generate in attempts:
-        key_name = {
-            "Groq": "GROQ_API_KEY",
-            "Gemini": "GEMINI_API_KEY",
-            "Perplexity": "PERPLEXITY_API_KEY",
-            "OpenAI": "OPENAI_API_KEY",
+        required_keys = {
+            "Groq": ("GROQ_API_KEY",),
+            "NVIDIA": ("NVIDIA_API_KEY",),
+            "OpenRouter": ("OPENROUTER_API_KEY",),
+            "Cloudflare": ("CLOUDFLARE_API_TOKEN", "CLOUDFLARE_ACCOUNT_ID"),
+            "Gemini": ("GEMINI_API_KEY",),
+            "Perplexity": ("PERPLEXITY_API_KEY",),
+            "OpenAI": ("OPENAI_API_KEY",),
         }[name]
-        if not os.environ.get(key_name, "").strip():
+        missing_keys = [key for key in required_keys if not os.environ.get(key, "").strip()]
+        if missing_keys:
             # Missing optional fallbacks are normal in auto mode. Report a
             # missing key only when the administrator explicitly selected it.
             if provider != "auto":
-                errors.append(f"{name}: {key_name} not configured")
+                errors.append(f"{name}: {', '.join(missing_keys)} not configured")
+            continue
+        cooling_down = _provider_cooldown_remaining(name)
+        if cooling_down:
+            errors.append(f"{name}: cooling down after a temporary failure")
             continue
         try:
             return generate(prompt, use_web, use_code)
         except Exception as error:
             errors.append(f"{name}: {_provider_error_text(error)}")
+            _start_provider_cooldown(name, error)
     detail = " | ".join(errors) if errors else "No answer provider API key is configured"
     raise RuntimeError(
         "Answer service is temporarily unavailable. "
         + detail
-        + ". Check Render keys/limits, wait for quota reset, then retry."
+        + ". Add at least one working free-provider key in Render, or retry after its limit resets."
     )
 
 

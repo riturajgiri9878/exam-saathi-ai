@@ -1180,7 +1180,7 @@ html, body {
     .chat-home-hero { margin-top: 10px; }
 }
 
-/* Exam Saathi v5.2 — Midnight Sky
+/* Exam Saathi v5.3 — Midnight Sky
    One dark, high-contrast palette across the complete student experience. */
 :root, .dark,
 .gradio-container, .gradio-container.dark, .dark .gradio-container {
@@ -1750,7 +1750,8 @@ with gr.Blocks(title="Exam Saathi AI") as demo:
 
 - Uploaded content is processed for the current app session.
 - Low-confidence scanned documents are sent to Google Gemini for OCR when GEMINI_API_KEY is configured.
-- Typed questions use automatic provider routing. Depending on configured keys, they may be sent to Groq, OpenAI, Gemini or Perplexity.
+- Typed questions use automatic provider routing. Free-only mode is ON by default, so automatic calls use Groq, NVIDIA NIM, OpenRouter, Cloudflare Workers AI and Gemini. Perplexity/OpenAI are used only when free-only mode is deliberately disabled or one is explicitly selected.
+- Free-provider fallbacks are optional and rate-limited. A temporary timeout, overload or quota error places that provider on a short cooldown and immediately tries the next configured provider.
 - LangGraph controls question classification, answer generation, deterministic verification, bounded retry and human-review routing.
 - LangSmith tracing is optional and OFF unless `LANGSMITH_TRACING=true` is configured. Student inputs and outputs remain hidden unless an administrator explicitly enables trace content.
 - Current-fact questions automatically request web grounding. Perplexity Sonar is tried first when configured, followed by Groq/Gemini web tools; online sources and verification time are listed.

@@ -32,7 +32,7 @@ from urllib.request import Request, urlopen
 import pymupdf
 
 
-ENGINE_VERSION = "5.3.1"
+ENGINE_VERSION = "5.3.2"
 ANSWER_PROVIDER = os.environ.get("ANSWER_PROVIDER", "auto").strip().lower()
 FREE_PROVIDER_ONLY = os.environ.get(
     "EXAM_SAATHI_FREE_ONLY", "true"
@@ -594,6 +594,7 @@ def _post_openai_compatible(
     prompt: str,
     provider_slug: str,
     extra_headers: dict[str, str] | None = None,
+    timeout_seconds: int | None = None,
 ) -> tuple[str, list[dict[str, str]], bool, str]:
     """Call a hosted free-tier provider through its OpenAI-compatible endpoint."""
     payload = {
@@ -614,7 +615,7 @@ def _post_openai_compatible(
         headers=headers,
         method="POST",
     )
-    with urlopen(request, timeout=FREE_PROVIDER_TIMEOUT_SECONDS) as response:
+    with urlopen(request, timeout=timeout_seconds or FREE_PROVIDER_TIMEOUT_SECONDS) as response:
         value = json.loads(response.read().decode("utf-8"))
     content = _chat_completion_content(value)
     if not content:
@@ -622,7 +623,12 @@ def _post_openai_compatible(
     return content, [], False, f"{provider_slug}:{model}"
 
 
-def _nvidia_generate(prompt: str, use_web: bool, use_code: bool) -> tuple[str, list[dict[str, str]], bool, str]:
+def _nvidia_generate(
+    prompt: str,
+    use_web: bool,
+    use_code: bool,
+    timeout_seconds: int | None = None,
+) -> tuple[str, list[dict[str, str]], bool, str]:
     """Use NVIDIA's hosted NIM developer endpoint as a free-tier fallback."""
     del use_web, use_code  # NIM reasoning is not treated as live web/code verification.
     api_key = os.environ.get("NVIDIA_API_KEY", "").strip()
@@ -638,12 +644,18 @@ def _nvidia_generate(prompt: str, use_web: bool, use_code: bool) -> tuple[str, l
             model=model,
             prompt=prompt,
             provider_slug="nvidia",
+            timeout_seconds=timeout_seconds,
         )
     except Exception as error:
         raise RuntimeError("NVIDIA unavailable: " + _provider_error_text(error)) from error
 
 
-def _openrouter_generate(prompt: str, use_web: bool, use_code: bool) -> tuple[str, list[dict[str, str]], bool, str]:
+def _openrouter_generate(
+    prompt: str,
+    use_web: bool,
+    use_code: bool,
+    timeout_seconds: int | None = None,
+) -> tuple[str, list[dict[str, str]], bool, str]:
     """Use OpenRouter's free-model router; model availability may rotate."""
     del use_web, use_code
     api_key = os.environ.get("OPENROUTER_API_KEY", "").strip()
@@ -664,12 +676,18 @@ def _openrouter_generate(prompt: str, use_web: bool, use_code: bool) -> tuple[st
             prompt=prompt,
             provider_slug="openrouter",
             extra_headers=extra_headers,
+            timeout_seconds=timeout_seconds,
         )
     except Exception as error:
         raise RuntimeError("OpenRouter unavailable: " + _provider_error_text(error)) from error
 
 
-def _cloudflare_generate(prompt: str, use_web: bool, use_code: bool) -> tuple[str, list[dict[str, str]], bool, str]:
+def _cloudflare_generate(
+    prompt: str,
+    use_web: bool,
+    use_code: bool,
+    timeout_seconds: int | None = None,
+) -> tuple[str, list[dict[str, str]], bool, str]:
     """Use the Cloudflare Workers AI free allocation as the final free backup."""
     del use_web, use_code
     api_token = os.environ.get("CLOUDFLARE_API_TOKEN", "").strip()
@@ -689,12 +707,18 @@ def _cloudflare_generate(prompt: str, use_web: bool, use_code: bool) -> tuple[st
             model=model,
             prompt=prompt,
             provider_slug="cloudflare",
+            timeout_seconds=timeout_seconds,
         )
     except Exception as error:
         raise RuntimeError("Cloudflare unavailable: " + _provider_error_text(error)) from error
 
 
-def _groq_generate(prompt: str, use_web: bool, use_code: bool) -> tuple[str, list[dict[str, str]], bool, str]:
+def _groq_generate(
+    prompt: str,
+    use_web: bool,
+    use_code: bool,
+    timeout_seconds: int | None = None,
+) -> tuple[str, list[dict[str, str]], bool, str]:
     api_key = os.environ.get("GROQ_API_KEY", "").strip()
     if not api_key:
         raise RuntimeError("GROQ_API_KEY is not configured.")
@@ -709,6 +733,11 @@ def _groq_generate(prompt: str, use_web: bool, use_code: bool) -> tuple[str, lis
         models = [GROQ_COMPOUND_FALLBACK_MODEL, GROQ_WEB_MODEL]
     elif compound_request:
         models = [GROQ_WEB_MODEL, GROQ_COMPOUND_FALLBACK_MODEL]
+    elif timeout_seconds is not None:
+        # Full-chapter batches need a quick first response. The smaller GPT-OSS
+        # model is sufficient for source-grounded teaching and leaves the
+        # larger reasoning model available for hard standalone questions.
+        models = [GROQ_FALLBACK_MODEL]
     else:
         models = [GROQ_REASONING_MODEL, GROQ_FALLBACK_MODEL]
     errors: list[str] = []
@@ -747,7 +776,7 @@ def _groq_generate(prompt: str, use_web: bool, use_code: bool) -> tuple[str, lis
             method="POST",
         )
         try:
-            with urlopen(request, timeout=GROQ_TIMEOUT_SECONDS) as response:
+            with urlopen(request, timeout=timeout_seconds or GROQ_TIMEOUT_SECONDS) as response:
                 value = json.loads(response.read().decode("utf-8"))
             message = value["choices"][0]["message"]
             content = str(message.get("content", "")).strip()
@@ -759,7 +788,12 @@ def _groq_generate(prompt: str, use_web: bool, use_code: bool) -> tuple[str, lis
     raise RuntimeError("Groq unavailable. " + " | ".join(errors))
 
 
-def _gemini_generate(prompt: str, use_web: bool, use_code: bool) -> tuple[str, list[dict[str, str]], bool, str]:
+def _gemini_generate(
+    prompt: str,
+    use_web: bool,
+    use_code: bool,
+    timeout_seconds: int | None = None,
+) -> tuple[str, list[dict[str, str]], bool, str]:
     api_key = os.environ.get("GEMINI_API_KEY", "").strip()
     if not api_key:
         raise RuntimeError("GEMINI_API_KEY is not configured.")
@@ -768,7 +802,7 @@ def _gemini_generate(prompt: str, use_web: bool, use_code: bool) -> tuple[str, l
 
     client = genai.Client(
         api_key=api_key,
-        http_options=types.HttpOptions(timeout=ANSWER_TIMEOUT_SECONDS * 1000),
+        http_options=types.HttpOptions(timeout=(timeout_seconds or ANSWER_TIMEOUT_SECONDS) * 1000),
     )
     tools: list[Any] = []
     if use_web:
@@ -783,7 +817,8 @@ def _gemini_generate(prompt: str, use_web: bool, use_code: bool) -> tuple[str, l
         tools=tools or None,
     )
     errors: list[str] = []
-    models = list(dict.fromkeys([GEMINI_ANSWER_MODEL, *GEMINI_FALLBACK_MODELS]))[:2]
+    model_limit = 1 if timeout_seconds is not None else 2
+    models = list(dict.fromkeys([GEMINI_ANSWER_MODEL, *GEMINI_FALLBACK_MODELS]))[:model_limit]
     for model in models:
         try:
             response = client.models.generate_content(model=model, contents=prompt, config=config)
@@ -821,7 +856,12 @@ def _perplexity_sources(response: dict[str, Any]) -> list[dict[str, str]]:
     return _dedupe_sources(sources)
 
 
-def _perplexity_generate(prompt: str, use_web: bool, use_code: bool) -> tuple[str, list[dict[str, str]], bool, str]:
+def _perplexity_generate(
+    prompt: str,
+    use_web: bool,
+    use_code: bool,
+    timeout_seconds: int | None = None,
+) -> tuple[str, list[dict[str, str]], bool, str]:
     """Ground current/GK/geography claims with Perplexity Sonar when configured."""
     api_key = os.environ.get("PERPLEXITY_API_KEY", "").strip()
     if not api_key:
@@ -843,7 +883,7 @@ def _perplexity_generate(prompt: str, use_web: bool, use_code: bool) -> tuple[st
         method="POST",
     )
     try:
-        with urlopen(request, timeout=ANSWER_TIMEOUT_SECONDS) as response:
+        with urlopen(request, timeout=timeout_seconds or ANSWER_TIMEOUT_SECONDS) as response:
             value = json.loads(response.read().decode("utf-8"))
         content = str(value["choices"][0]["message"].get("content", "")).strip()
         if not content:
@@ -853,7 +893,12 @@ def _perplexity_generate(prompt: str, use_web: bool, use_code: bool) -> tuple[st
         raise RuntimeError("Perplexity unavailable: " + _provider_error_text(error)) from error
 
 
-def _openai_generate(prompt: str, use_web: bool, use_code: bool) -> tuple[str, list[dict[str, str]], bool, str]:
+def _openai_generate(
+    prompt: str,
+    use_web: bool,
+    use_code: bool,
+    timeout_seconds: int | None = None,
+) -> tuple[str, list[dict[str, str]], bool, str]:
     """Use the OpenAI API as an optional reasoning fallback, never ChatGPT cookies/login."""
     api_key = os.environ.get("OPENAI_API_KEY", "").strip()
     model = os.environ.get("OPENAI_MODEL", OPENAI_MODEL).strip()
@@ -879,7 +924,7 @@ def _openai_generate(prompt: str, use_web: bool, use_code: bool) -> tuple[str, l
         method="POST",
     )
     try:
-        with urlopen(request, timeout=ANSWER_TIMEOUT_SECONDS) as response:
+        with urlopen(request, timeout=timeout_seconds or ANSWER_TIMEOUT_SECONDS) as response:
             value = json.loads(response.read().decode("utf-8"))
         content = str(value["choices"][0]["message"].get("content", "")).strip()
         if not content:
@@ -891,13 +936,22 @@ def _openai_generate(prompt: str, use_web: bool, use_code: bool) -> tuple[str, l
         raise RuntimeError("OpenAI unavailable: " + _provider_error_text(error)) from error
 
 
-def _default_generate(prompt: str, use_web: bool, use_code: bool) -> tuple[str, list[dict[str, str]], bool, str]:
+def _default_generate(
+    prompt: str,
+    use_web: bool,
+    use_code: bool,
+    *,
+    force_auto: bool = False,
+    timeout_seconds: int | None = None,
+    max_attempts: int | None = None,
+    response_validator: Callable[[str], Any] | None = None,
+) -> tuple[str, list[dict[str, str]], bool, str]:
     """Route across optional providers without exposing secret-bearing raw errors."""
     allowed = {
         "auto", "groq", "nvidia", "openrouter", "cloudflare",
         "gemini", "perplexity", "openai",
     }
-    provider = ANSWER_PROVIDER if ANSWER_PROVIDER in allowed else "auto"
+    provider = "auto" if force_auto else (ANSWER_PROVIDER if ANSWER_PROVIDER in allowed else "auto")
     attempts: list[tuple[str, Callable[..., tuple[str, list[dict[str, str]], bool, str]]]] = []
     if provider == "auto":
         if use_web:
@@ -944,6 +998,7 @@ def _default_generate(prompt: str, use_web: bool, use_code: bool) -> tuple[str, 
         }[provider])
 
     errors: list[str] = []
+    configured_attempts = 0
     for name, generate in attempts:
         required_keys = {
             "Groq": ("GROQ_API_KEY",),
@@ -965,8 +1020,22 @@ def _default_generate(prompt: str, use_web: bool, use_code: bool) -> tuple[str, 
         if cooling_down:
             errors.append(f"{name}: cooling down after a temporary failure")
             continue
+        if max_attempts is not None and configured_attempts >= max_attempts:
+            break
+        configured_attempts += 1
         try:
-            return generate(prompt, use_web, use_code)
+            if timeout_seconds is None:
+                result = generate(prompt, use_web, use_code)
+            else:
+                result = generate(
+                    prompt,
+                    use_web,
+                    use_code,
+                    timeout_seconds=timeout_seconds,
+                )
+            if response_validator is not None:
+                response_validator(result[0])
+            return result
         except Exception as error:
             errors.append(f"{name}: {_provider_error_text(error)}")
             _start_provider_cooldown(name, error)

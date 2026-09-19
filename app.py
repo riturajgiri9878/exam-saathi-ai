@@ -772,8 +772,14 @@ def build_chapter_ui(analysis,question,language,previous_lesson):
     try:
         for lesson in lesson_steps(analysis,language,question,previous_lesson):
             done=len(lesson['batches']); total=lesson['total_batches']
-            status=f'{done}/{total} source batches explained · {lesson["status"]}. '
+            preview_count=len(lesson.get('preview_batches',[]))
+            ai_done=max(0,done-preview_count)
+            status=f'{ai_done}/{total} AI lesson batches ready · {lesson["status"]}. '
+            if preview_count:
+                status+=f'{preview_count} instant source preview(s) are visible while AI enhancement runs. '
             status+='Every extracted section is listed in Source coverage below.'
+            if lesson.get('active_message'):
+                status+=' '+lesson['active_message']
             if lesson.get('errors'):
                 latest=lesson['errors'][sorted(lesson['errors'],key=int)[-1]]
                 status+=' Why it stopped: '+latest
@@ -1406,6 +1412,11 @@ html, body {
 #chapter-lesson-output .chapter-guide .lesson-banner {
     background: linear-gradient(120deg, #171d24, #1b2430) !important;
     border: 1px solid #375875 !important;
+}
+#chapter-lesson-output .chapter-guide .preview-notice {
+    background: #2d2315 !important;
+    color: #ffe3ad !important;
+    border-left: 4px solid #f4b860 !important;
 }
 #chapter-lesson-output .chapter-guide .topic {
     background: #17151c !important;

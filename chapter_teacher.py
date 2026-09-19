@@ -5,12 +5,19 @@ import copy
 import hashlib
 import html
 import json
+import os
 import re
 
 from language_guard import language_instruction
 
-VERSION = 'chapter-v2'
+VERSION = 'chapter-v3-provider-mesh-preview'
 BATCH_UNITS = 1
+CHAPTER_PROVIDER_TIMEOUT_SECONDS = max(
+    15, min(60, int(os.environ.get('CHAPTER_PROVIDER_TIMEOUT_SECONDS', '30')))
+)
+CHAPTER_PROVIDER_ATTEMPTS = max(
+    1, min(5, int(os.environ.get('CHAPTER_PROVIDER_ATTEMPTS', '3')))
+)
 
 
 def source_signature(analysis):
@@ -131,35 +138,90 @@ def batch_prompt(units, language, request, previous_titles):
         '\nSOURCE DATA:\n'+json.dumps(units,ensure_ascii=False))
 
 
-class GeminiLessonProvider:
+class ProviderMeshLessonProvider:
+    """Use the main free-provider mesh and accept only a valid lesson batch."""
+
+    def __init__(self):
+        self.last_model = ''
+
     def __call__(self,prompt,units,language):
-        from core import GEMINI_API_KEY,GEMINI_MODEL,GEMINI_FALLBACK_MODELS
-        from google import genai
-        from google.genai import types
-        if not GEMINI_API_KEY: raise ValueError('Detailed lessons need the configured Gemini API key.')
-        failures=[]
-        with genai.Client(api_key=GEMINI_API_KEY,http_options=types.HttpOptions(timeout=75000)) as client:
-            for model in list(dict.fromkeys([GEMINI_MODEL,*GEMINI_FALLBACK_MODELS]))[:2]:
-                try:
-                    response=client.models.generate_content(model=model,contents=prompt,
-                        config=types.GenerateContentConfig(response_mime_type='application/json',max_output_tokens=14000))
-                    data=validate_batch(json.loads(response.text),units)
-                    return data
-                except Exception as error:
-                    failures.append(str(error))
-                    continue
-        combined=' '.join(failures).upper()
-        if '429' in combined or 'RESOURCE_EXHAUSTED' in combined:
-            reason='Gemini quota/rate limit reached. Wait briefly, then press Build / Resume.'
-        elif '503' in combined or 'UNAVAILABLE' in combined:
-            reason='Gemini is temporarily busy. Press Build / Resume to retry this section.'
-        elif '404' in combined or 'NOT_FOUND' in combined:
-            reason='Configured Gemini model is unavailable. Check GEMINI_MODEL and GEMINI_FALLBACK_MODELS in Render.'
-        elif any(x in combined for x in ('JSON','LESSON DID NOT','MISSING LESSON','NO EXPLAINED','INVALID')):
-            reason='Gemini returned an incomplete lesson format. This smaller section can be retried.'
-        else:
-            reason='Gemini could not complete this section. Check Render logs, then press Build / Resume.'
-        raise ValueError(reason)
+        del language
+        from answer_engine import _default_generate, _parse_json
+
+        accepted={}
+
+        def validate_response(text):
+            accepted['data']=validate_batch(_parse_json(text),units)
+
+        _text,_sources,_used_code,model=_default_generate(
+            prompt,
+            use_web=False,
+            use_code=False,
+            force_auto=True,
+            timeout_seconds=CHAPTER_PROVIDER_TIMEOUT_SECONDS,
+            max_attempts=CHAPTER_PROVIDER_ATTEMPTS,
+            response_validator=validate_response,
+        )
+        self.last_model=model
+        return accepted['data']
+
+
+def instant_source_preview(units, language):
+    """Render useful source-grounded content before any hosted model returns."""
+    del language
+    ids=[u['id'] for u in units]
+    raw='\n'.join(str(u.get('text','')).strip() for u in units).strip()
+    compact=re.sub(r'[ \t]+',' ',raw)
+    parts=[item.strip() for item in re.split(r'(?<=[.!?।])\s+|\n+',compact) if item.strip()]
+    if len(parts)<3:
+        parts=[compact[i:i+320].strip() for i in range(0,len(compact),320) if compact[i:i+320].strip()]
+    if not parts:
+        parts=['The uploaded source section contains no readable sentence.']
+    steps=[f'Source point {i}: {point}' for i,point in enumerate(parts[:5],1)]
+    while len(steps)<3:
+        steps.append('Review the complete source excerpt above and mark its important terms.')
+    takeaways=parts[:2]
+    while len(takeaways)<2:
+        takeaways.append('Use the original source wording until the AI-enhanced explanation is ready.')
+    nodes=[]
+    for i,point in enumerate(parts[:4],1):
+        nodes.append({'label':f'Source point {i}','detail':point[:220]})
+    while len(nodes)<2:
+        nodes.append({'label':'Review task','detail':'Connect this point with the complete source excerpt.'})
+    source_name=str(units[0].get('source_name','Uploaded notes'))
+    title_hint=re.sub(r'\s+',' ',parts[0])[:72].rstrip(' .,:;-')
+    definition=compact[:1800]
+    return validate_batch({
+        'covered_source_ids':ids,
+        'topics':[{
+            'title':'⚡ Instant source preview — '+(title_hint or source_name),
+            'definition':definition,
+            'story':'Think of this preview as a highlighter placed directly on your uploaded notes. It appears immediately so study can begin while Exam Saathi contacts the available AI providers for the deeper story, explanation and examples.',
+            'analogy_limit':'This is an extractive preview, not the final AI-enhanced lesson. It preserves source wording and does not add missing facts or interpretations.',
+            'steps':steps,
+            'example':'Exact source excerpt: '+parts[0][:700],
+            'memory_tip':'First underline the key terms in this source preview; the enhanced lesson will replace this card automatically when a provider succeeds.',
+            'takeaways':takeaways,
+            'check_question':'In your own words, what is the main idea stated in this source section?',
+            'source_ids':ids,
+            'diagram':{'kind':'concepts','caption':'Instant map of the uploaded source points','nodes':nodes},
+            'comparison':[],
+        }],
+        'short_questions':[{
+            'question':'What is the central idea stated in this source section?',
+            'answer':definition,
+            'why':'This checks direct understanding of the uploaded evidence before interpretation.',
+            'source_ids':ids,
+        }],
+        'long_questions':[{
+            'question':'Explain the important points contained in this source section.',
+            'answer':definition,
+            'outline':steps[:3],
+            'why':'This turns the exact source into a structured revision response.',
+            'source_ids':ids,
+        }],
+        'revision_points':takeaways,
+    },units)
 
 
 def lesson_steps(analysis,language,request='',existing=None,provider=None):
@@ -171,37 +233,54 @@ def lesson_steps(analysis,language,request='',existing=None,provider=None):
     else:
         lesson={'cache_key':cache_key,'source_signature':signature,'language':language,
                 'units':units,'batches':{},'errors':{},'status':'building',
+                'preview_batches':[],'models':{},'active_message':'',
                 'source_warnings':list(analysis.get('batch_warnings',[])),
                 'skipped_pages':analysis.get('page_quality',{}).get('SKIPPED',0)}
+    lesson.setdefault('preview_batches',[])
+    lesson.setdefault('models',{})
+    lesson.setdefault('active_message','')
     # One ~3k-character section per request prevents oversized/truncated JSON.
     # It also makes retries cheaper and preserves every completed section.
     batches=[units[i:i+BATCH_UNITS] for i in range(0,len(units),BATCH_UNITS)]
     lesson['total_batches']=len(batches)
     yield lesson
-    generate=provider or GeminiLessonProvider()
+    generate=provider or ProviderMeshLessonProvider()
     for index,batch in enumerate(batches):
         key=str(index)
-        if key in lesson['batches']: continue
-        titles=[t['title'] for b in lesson['batches'].values() for t in b['topics']]
+        if key in lesson['batches'] and key not in lesson['preview_batches']: continue
+        if key not in lesson['batches']:
+            lesson['batches'][key]=instant_source_preview(batch,language)
+            lesson['preview_batches'].append(key)
+            lesson['active_message']=f'Instant source preview ready for {batch[0]["id"]}. Building the deeper AI lesson with automatic provider fallback…'
+            lesson['status']='building'
+            yield lesson
+        titles=[t['title'] for k,b in lesson['batches'].items()
+                if k not in lesson['preview_batches'] for t in b['topics']]
         try:
             data=validate_batch(generate(batch_prompt(batch,language,request,titles),batch,language),batch)
             lesson['batches'][key]=data
+            lesson['preview_batches']=[item for item in lesson['preview_batches'] if item!=key]
+            model=str(getattr(generate,'last_model','')).strip()
+            if model: lesson['models'][key]=model
             lesson['errors'].pop(key,None)
         except Exception as error:
             message=str(error).strip() or 'Section generation failed. Press Build / Resume to retry.'
             lesson['errors'][key]=message
+            lesson['active_message']='The instant source preview remains available. Press Build / Resume later to retry AI enhancement.'
             lesson['status']='partial'
             yield lesson
             return
-        lesson['status']='complete' if len(lesson['batches'])==len(batches) else 'building'
+        lesson['active_message']=''
+        lesson['status']='complete' if len(lesson['batches'])==len(batches) and not lesson['preview_batches'] else 'building'
         yield lesson
-    lesson['status']='complete'
+    lesson['status']='complete' if not lesson['preview_batches'] else 'partial'
 
 
 LESSON_CSS = '''
 .chapter-guide{color:#202843;font:16px/1.8 Inter,"Noto Sans",Arial,sans-serif;overflow-wrap:anywhere}
 .chapter-guide h2,.chapter-guide h3{color:#44317c!important;line-height:1.4}
 .chapter-guide .lesson-banner{background:linear-gradient(120deg,#e7ddff,#d9f5ec);padding:24px;border-radius:18px;margin:12px 0}
+.chapter-guide .preview-notice{background:#fff0d5;border-left:4px solid #d49d35;padding:10px;border-radius:8px}
 .chapter-guide .topic{background:#fffdf9;border:1px solid #d8cce9;border-radius:18px;padding:26px;margin:24px 0;box-shadow:0 4px 12px #34334b09}
 .chapter-guide .story{background:#fff0da;border-left:5px solid #d49d35;padding:18px;border-radius:10px}
 .chapter-guide .example{background:#e6f4ed;border-left:5px solid #38846a;padding:18px;border-radius:10px}
@@ -246,10 +325,14 @@ def render_lesson(lesson,style=True):
         return f'<p dir="auto" class="{cls}">{e(value)}</p>'
     ordered=[b for _,b in sorted(lesson['batches'].items(),key=lambda x:int(x[0]))]
     total=lesson.get('total_batches',1)
+    preview_count=len(lesson.get('preview_batches',[]))
+    ai_done=max(0,len(ordered)-preview_count)
     prefix='<style>'+LESSON_CSS+'</style>' if style else ''
     output=prefix+'<div class="chapter-guide">'
     output+='<div class="lesson-banner"><h2>📖 Full Chapter · Story Study Guide</h2>'
-    output+=f'<p>{e(lesson["language"])} · {len(ordered)}/{total} source batches explained · {e(lesson["status"])}</p>'
+    output+=f'<p>{e(lesson["language"])} · {ai_done}/{total} AI lesson batches ready · {e(lesson["status"])}</p>'
+    if preview_count:
+        output+=f'<p class="preview-notice">⚡ {preview_count} instant source preview(s) are visible now while provider fallback builds the deeper lesson.</p>'
     output+='<p>Stories/examples and concept diagrams are teaching aids. Source references identify the original evidence.</p></div>'
     if lesson['status']!='complete':
         output+='<p class="warning">This lesson is not complete. Completed parts remain below. Use Build / Resume to continue; missing sections are listed at the end.</p>'

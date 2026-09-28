@@ -1,4 +1,4 @@
-"""Agentic orchestration layer for Exam Saathi v5.3.
+"""Agentic orchestration layer for Exam Saathi v5.4.
 
 The graph keeps the proven answer engine as the subject-solving tool and adds
 state, routing, deterministic verification, bounded retry, checkpoint memory,
@@ -49,7 +49,7 @@ class ExamSaathiWorkflow:
     ) -> None:
         self.solve_fn = solve_fn
         self.artifact_fn = artifact_fn
-        configured = int(os.environ.get("EXAM_GRAPH_MAX_RETRIES", "1"))
+        configured = int(os.environ.get("EXAM_GRAPH_MAX_RETRIES", "0"))
         self.max_retries = max(0, min(2, configured if max_retries is None else max_retries))
         self.graph = self._build().compile(checkpointer=checkpointer)
 
@@ -204,7 +204,7 @@ class ExamSaathiWorkflow:
         register_thread(resolved_thread_id)
         config = {
             "configurable": {"thread_id": resolved_thread_id},
-            "tags": ["exam-saathi", "v5.3", "student-question"],
+            "tags": ["exam-saathi", "v5.4", "student-question"],
             "metadata": {"workflow": "agentic-learning-graph", "content_logged": False},
         }
         return self.graph.invoke(payload, config=config)

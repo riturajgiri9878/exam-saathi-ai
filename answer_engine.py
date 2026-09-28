@@ -32,7 +32,7 @@ from urllib.request import Request, urlopen
 import pymupdf
 
 
-ENGINE_VERSION = "5.3.2"
+ENGINE_VERSION = "5.4.0"
 ANSWER_PROVIDER = os.environ.get("ANSWER_PROVIDER", "auto").strip().lower()
 FREE_PROVIDER_ONLY = os.environ.get(
     "EXAM_SAATHI_FREE_ONLY", "true"
@@ -71,6 +71,13 @@ OPENROUTER_MODEL = os.environ.get("OPENROUTER_MODEL", "openrouter/free").strip()
 CLOUDFLARE_MODEL = os.environ.get(
     "CLOUDFLARE_MODEL", "@cf/meta/llama-3.3-70b-instruct-fp8-fast"
 ).strip()
+QWEN_OLLAMA_URL = os.environ.get("QWEN_OLLAMA_URL", "").strip()
+QWEN_MODEL = os.environ.get("QWEN_MODEL", "qwen3:8b").strip()
+QWEN_API_URL = os.environ.get("QWEN_API_URL", "").strip()
+QWEN_HOSTED_MODEL = os.environ.get("QWEN_HOSTED_MODEL", "Qwen/Qwen3-8B").strip()
+QWEN_MAX_TOKENS = max(400, min(3200, int(os.environ.get("QWEN_MAX_TOKENS", "1800"))))
+QWEN_CONTEXT_TOKENS = max(2048, min(16384, int(os.environ.get("QWEN_CONTEXT_TOKENS", "4096"))))
+QWEN_TIMEOUT_SECONDS = max(15, min(120, int(os.environ.get("QWEN_TIMEOUT_SECONDS", "45"))))
 ANSWER_TIMEOUT_SECONDS = int(os.environ.get("ANSWER_TIMEOUT_SECONDS", "75"))
 GROQ_TIMEOUT_SECONDS = max(30, int(os.environ.get("GROQ_TIMEOUT_SECONDS", "60")))
 FREE_PROVIDER_TIMEOUT_SECONDS = max(
@@ -78,6 +85,12 @@ FREE_PROVIDER_TIMEOUT_SECONDS = max(
 )
 PROVIDER_COOLDOWN_SECONDS = max(
     10, int(os.environ.get("PROVIDER_COOLDOWN_SECONDS", "60"))
+)
+ANSWER_PASS_TIMEOUT_SECONDS = max(
+    15, min(60, int(os.environ.get("ANSWER_PASS_TIMEOUT_SECONDS", "30")))
+)
+ANSWER_MAX_PROVIDER_ATTEMPTS = max(
+    1, min(4, int(os.environ.get("ANSWER_MAX_PROVIDER_ATTEMPTS", "2")))
 )
 MAX_QUESTION_CHARACTERS = int(os.environ.get("MAX_QUESTION_CHARACTERS", "12000"))
 MAX_RAG_CHARACTERS = int(os.environ.get("MAX_RAG_CHARACTERS", "18000"))
@@ -586,6 +599,12 @@ def _chat_completion_content(value: dict[str, Any]) -> str:
         return ""
 
 
+def _without_hidden_thinking(content: str) -> str:
+    """Never display Qwen's private thinking trace as the student answer."""
+    cleaned = re.sub(r"<think>.*?</think>", "", str(content or ""), flags=re.DOTALL | re.IGNORECASE)
+    return cleaned.strip()
+
+
 def _post_openai_compatible(
     *,
     url: str,
@@ -595,13 +614,14 @@ def _post_openai_compatible(
     provider_slug: str,
     extra_headers: dict[str, str] | None = None,
     timeout_seconds: int | None = None,
+    max_tokens: int = 6500,
 ) -> tuple[str, list[dict[str, str]], bool, str]:
     """Call a hosted free-tier provider through its OpenAI-compatible endpoint."""
     payload = {
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
         "temperature": 0.1,
-        "max_tokens": 6500,
+        "max_tokens": max_tokens,
     }
     headers = {
         "Authorization": f"Bearer {api_key}",
@@ -621,6 +641,123 @@ def _post_openai_compatible(
     if not content:
         raise RuntimeError("empty model response")
     return content, [], False, f"{provider_slug}:{model}"
+
+
+def _ollama_qwen_generate(
+    prompt: str,
+    use_web: bool,
+    use_code: bool,
+    timeout_seconds: int | None = None,
+) -> tuple[str, list[dict[str, str]], bool, str]:
+    """Call a deliberately configured Ollama server with bounded non-thinking output.
+
+    QWEN_OLLAMA_URL is empty by default. Render cannot reach a student's
+    localhost, so production skips it instantly unless a reachable endpoint
+    is deliberately configured.
+    """
+    del use_web, use_code
+    base_url = os.environ.get("QWEN_OLLAMA_URL", QWEN_OLLAMA_URL).strip().rstrip("/")
+    model = os.environ.get("QWEN_MODEL", QWEN_MODEL).strip()
+    if not base_url:
+        raise RuntimeError("QWEN_OLLAMA_URL is not configured.")
+    if not model:
+        raise RuntimeError("QWEN_MODEL is not configured.")
+    if not re.match(r"^https?://", base_url, flags=re.IGNORECASE):
+        raise RuntimeError("QWEN_OLLAMA_URL must use http or https.")
+    url = base_url if base_url.endswith("/api/chat") else base_url + "/api/chat"
+    qwen_prompt = (
+        prompt
+        + "\n\nReturn only the requested final JSON. Do not reveal internal reasoning, "
+        "do not repeat completed steps, and stop after the final JSON. /no_think"
+    )
+    payload = {
+        "model": model,
+        "messages": [{"role": "user", "content": qwen_prompt}],
+        "stream": False,
+        "think": False,
+        "format": "json",
+        "keep_alive": "2m",
+        "options": {
+            "temperature": 0.1,
+            "num_ctx": QWEN_CONTEXT_TOKENS,
+            "num_predict": QWEN_MAX_TOKENS,
+            "repeat_penalty": 1.12,
+        },
+    }
+    headers = {"Content-Type": "application/json", "User-Agent": f"Exam-Saathi/{ENGINE_VERSION}"}
+    optional_key = os.environ.get("QWEN_OLLAMA_API_KEY", "").strip()
+    if optional_key:
+        headers["Authorization"] = f"Bearer {optional_key}"
+    request = Request(
+        url,
+        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        headers=headers,
+        method="POST",
+    )
+    try:
+        with urlopen(request, timeout=timeout_seconds or QWEN_TIMEOUT_SECONDS) as response:
+            value = json.loads(response.read().decode("utf-8"))
+        content = _without_hidden_thinking(str(value.get("message", {}).get("content", "")))
+        if not content:
+            raise RuntimeError("empty model response")
+        return content, [], False, f"qwen-ollama:{model}"
+    except Exception as error:
+        raise RuntimeError("Qwen Ollama unavailable: " + _provider_error_text(error)) from error
+
+
+def _hosted_qwen_generate(
+    prompt: str,
+    use_web: bool,
+    use_code: bool,
+    timeout_seconds: int | None = None,
+) -> tuple[str, list[dict[str, str]], bool, str]:
+    """Call an administrator-supplied OpenAI-compatible hosted Qwen endpoint."""
+    del use_web, use_code
+    api_url = os.environ.get("QWEN_API_URL", QWEN_API_URL).strip()
+    api_key = os.environ.get("QWEN_API_KEY", "").strip()
+    model = os.environ.get("QWEN_HOSTED_MODEL", QWEN_HOSTED_MODEL).strip()
+    if not api_url:
+        raise RuntimeError("QWEN_API_URL is not configured.")
+    if not api_key:
+        raise RuntimeError("QWEN_API_KEY is not configured.")
+    if not model:
+        raise RuntimeError("QWEN_HOSTED_MODEL is not configured.")
+    try:
+        result = _post_openai_compatible(
+            url=api_url,
+            api_key=api_key,
+            model=model,
+            prompt=prompt + "\n\nReturn final JSON only. Do not include a thinking trace. /no_think",
+            provider_slug="qwen-hosted",
+            timeout_seconds=timeout_seconds or QWEN_TIMEOUT_SECONDS,
+            max_tokens=QWEN_MAX_TOKENS,
+        )
+        return _without_hidden_thinking(result[0]), result[1], result[2], result[3]
+    except Exception as error:
+        raise RuntimeError("Hosted Qwen unavailable: " + _provider_error_text(error)) from error
+
+
+def _qwen_generate(
+    prompt: str,
+    use_web: bool,
+    use_code: bool,
+    timeout_seconds: int | None = None,
+) -> tuple[str, list[dict[str, str]], bool, str]:
+    """Prefer configured Ollama, then a configured hosted Qwen endpoint."""
+    errors: list[str] = []
+    if os.environ.get("QWEN_OLLAMA_URL", QWEN_OLLAMA_URL).strip():
+        try:
+            return _ollama_qwen_generate(prompt, use_web, use_code, timeout_seconds)
+        except Exception as error:
+            errors.append(_provider_error_text(error))
+    if os.environ.get("QWEN_API_URL", QWEN_API_URL).strip() and os.environ.get("QWEN_API_KEY", "").strip():
+        try:
+            return _hosted_qwen_generate(prompt, use_web, use_code, timeout_seconds)
+        except Exception as error:
+            errors.append(_provider_error_text(error))
+    if not errors:
+        raise RuntimeError("Qwen endpoint is not configured.")
+    raise RuntimeError("Qwen unavailable: " + " | ".join(errors))
 
 
 def _nvidia_generate(
@@ -948,7 +1085,7 @@ def _default_generate(
 ) -> tuple[str, list[dict[str, str]], bool, str]:
     """Route across optional providers without exposing secret-bearing raw errors."""
     allowed = {
-        "auto", "groq", "nvidia", "openrouter", "cloudflare",
+        "auto", "qwen", "ollama", "groq", "nvidia", "openrouter", "cloudflare",
         "gemini", "perplexity", "openai",
     }
     provider = "auto" if force_auto else (ANSWER_PROVIDER if ANSWER_PROVIDER in allowed else "auto")
@@ -960,6 +1097,7 @@ def _default_generate(
             attempts.extend([
                 ("Groq", _groq_generate),
                 ("Gemini", _gemini_generate),
+                ("Qwen", _qwen_generate),
                 ("NVIDIA", _nvidia_generate),
                 ("OpenRouter", _openrouter_generate),
                 ("Cloudflare", _cloudflare_generate),
@@ -969,6 +1107,7 @@ def _default_generate(
         elif use_code:
             attempts.extend([
                 ("Groq", _groq_generate),
+                ("Qwen", _qwen_generate),
                 ("NVIDIA", _nvidia_generate),
                 ("OpenRouter", _openrouter_generate),
                 ("Gemini", _gemini_generate),
@@ -978,6 +1117,7 @@ def _default_generate(
                 attempts.append(("OpenAI", _openai_generate))
         else:
             attempts.extend([
+                ("Qwen", _qwen_generate),
                 ("Groq", _groq_generate),
                 ("NVIDIA", _nvidia_generate),
                 ("OpenRouter", _openrouter_generate),
@@ -988,6 +1128,8 @@ def _default_generate(
                 attempts.append(("OpenAI", _openai_generate))
     else:
         attempts.append({
+            "qwen": ("Qwen", _qwen_generate),
+            "ollama": ("Qwen", _qwen_generate),
             "groq": ("Groq", _groq_generate),
             "nvidia": ("NVIDIA", _nvidia_generate),
             "openrouter": ("OpenRouter", _openrouter_generate),
@@ -1001,6 +1143,7 @@ def _default_generate(
     configured_attempts = 0
     for name, generate in attempts:
         required_keys = {
+            "Qwen": (),
             "Groq": ("GROQ_API_KEY",),
             "NVIDIA": ("NVIDIA_API_KEY",),
             "OpenRouter": ("OPENROUTER_API_KEY",),
@@ -1009,7 +1152,15 @@ def _default_generate(
             "Perplexity": ("PERPLEXITY_API_KEY",),
             "OpenAI": ("OPENAI_API_KEY",),
         }[name]
-        missing_keys = [key for key in required_keys if not os.environ.get(key, "").strip()]
+        if name == "Qwen":
+            qwen_local = bool(os.environ.get("QWEN_OLLAMA_URL", QWEN_OLLAMA_URL).strip())
+            qwen_hosted = bool(
+                os.environ.get("QWEN_API_URL", QWEN_API_URL).strip()
+                and os.environ.get("QWEN_API_KEY", "").strip()
+            )
+            missing_keys = [] if (qwen_local or qwen_hosted) else ["QWEN endpoint"]
+        else:
+            missing_keys = [key for key in required_keys if not os.environ.get(key, "").strip()]
         if missing_keys:
             # Missing optional fallbacks are normal in auto mode. Report a
             # missing key only when the administrator explicitly selected it.
@@ -1458,11 +1609,20 @@ def solve_question(
     conversation_text = _conversation_block(conversation_history)
     generator = generate_fn or _default_generate
 
+    def run_generator(active_prompt: str) -> tuple[str, list[dict[str, str]], bool, str]:
+        if generate_fn is None:
+            return _default_generate(
+                active_prompt,
+                route.use_web,
+                route.use_code,
+                timeout_seconds=ANSWER_PASS_TIMEOUT_SECONDS,
+                max_attempts=ANSWER_MAX_PROVIDER_ATTEMPTS,
+            )
+        return generator(active_prompt, route.use_web, route.use_code)
+
     try:
-        draft_text, draft_sources, draft_code, draft_model = generator(
-            _build_solver_prompt(question, language, route, rag_text, conversation_text),
-            route.use_web,
-            route.use_code,
+        draft_text, draft_sources, draft_code, draft_model = run_generator(
+            _build_solver_prompt(question, language, route, rag_text, conversation_text)
         )
         draft = _normalise_payload(_parse_json(draft_text), route.subject, language)
     except Exception:
@@ -1497,10 +1657,8 @@ def solve_question(
     review_code = False
     review_model = "review-unavailable"
     try:
-        review_text, review_sources, review_code, review_model = generator(
-            _build_review_prompt(question, language, route, rag_text, draft, conversation_text),
-            route.use_web,
-            route.use_code,
+        review_text, review_sources, review_code, review_model = run_generator(
+            _build_review_prompt(question, language, route, rag_text, draft, conversation_text)
         )
         answer = _normalise_payload(_parse_json(review_text), route.subject, language)
     except Exception as review_error:

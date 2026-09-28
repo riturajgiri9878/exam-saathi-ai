@@ -54,6 +54,9 @@ from study_features import (
 
 BASE_DIR = Path(__file__).resolve().parent
 REPORTS_DIR = BASE_DIR / "reports"
+ANSWER_UI_TIMEOUT_SECONDS = max(
+    45, min(180, int(os.environ.get("ANSWER_UI_TIMEOUT_SECONDS", "120")))
+)
 
 APP_USERNAME = os.environ.get("EXAM_SAATHI_USERNAME", "").strip()
 APP_PASSWORD = os.environ.get("EXAM_SAATHI_PASSWORD", "").strip()
@@ -458,8 +461,8 @@ def quick_solver_ui(
 
         rag_context = [] if local_fast else _question_context(safe_question, analysis)
         started = time.monotonic()
-        with ThreadPoolExecutor(max_workers=1, thread_name_prefix="exam-answer") as executor:
-            future = executor.submit(
+        executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="exam-answer")
+        future = executor.submit(
                 run_exam_graph,
                 safe_question,
                 language,
@@ -469,9 +472,16 @@ def quick_solver_ui(
                 base_history,
                 chat_id,
                 False,
-            )
+        )
+        try:
             while not future.done():
                 elapsed = time.monotonic() - started
+                if elapsed >= ANSWER_UI_TIMEOUT_SECONDS:
+                    future.cancel()
+                    raise TimeoutError(
+                        f"Answer deadline reached after {ANSWER_UI_TIMEOUT_SECONDS} seconds. "
+                        "The request was stopped so it cannot run endlessly; please retry once."
+                    )
                 message = _working_message(elapsed, local_fast)
                 pending_history[-1] = {"role": "assistant", "content": message}
                 yield (
@@ -481,6 +491,8 @@ def quick_solver_ui(
                 )
                 time.sleep(0.8)
             graph_result = future.result()
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
 
         answer = graph_result["answer"]
         rendered = answer_markdown(answer)
@@ -1186,7 +1198,7 @@ html, body {
     .chat-home-hero { margin-top: 10px; }
 }
 
-/* Exam Saathi v5.3.1 — Midnight Sky
+/* Exam Saathi v5.4.0 — Midnight Sky
    One dark, high-contrast palette across the complete student experience. */
 :root, .dark,
 .gradio-container, .gradio-container.dark, .dark .gradio-container {
@@ -1396,7 +1408,7 @@ html, body {
     border-color: #34303a !important;
 }
 
-/* v5.3.1 — Full Chapter contrast repair.
+/* v5.4.0 — Full Chapter contrast repair.
    render_lesson() ships portable light-theme HTML for downloads. Inside the
    Midnight app, this scoped layer converts only that lesson to accessible
    dark cards, without changing exported HTML/PDF colors. */
@@ -1770,7 +1782,8 @@ with gr.Blocks(title="Exam Saathi AI") as demo:
                 f"## Ask Exam Saathi · Verified Engine v{ENGINE_VERSION}\n\n"
                 "Ask any standalone question or first process your PDF/photo/text for source-grounded answers. "
                 "Provider routing is automatic: Perplexity (when configured) or Groq/Gemini grounds current facts; "
-                "Groq/OpenAI handle detailed reasoning; Gemini remains the OCR/vision backup. Geography answers "
+                "bounded Qwen, Groq and OpenAI handle detailed reasoning; Gemini remains the OCR/vision backup. "
+                "Exact arithmetic and radical expressions are checked locally with SymPy. Geography answers "
                 "include a labelled educational SVG and clearly mark schematic maps as not to scale.",
                 elem_classes=["exam-card"],
             )
@@ -1845,7 +1858,9 @@ with gr.Blocks(title="Exam Saathi AI") as demo:
 
 - Uploaded content is processed for the current app session.
 - Low-confidence scanned documents are sent to Google Gemini for OCR when GEMINI_API_KEY is configured.
-- Typed questions use automatic provider routing. Free-only mode is ON by default, so automatic calls use Groq, NVIDIA NIM, OpenRouter, Cloudflare Workers AI and Gemini. Perplexity/OpenAI are used only when free-only mode is deliberately disabled or one is explicitly selected.
+- Typed questions use automatic provider routing. Free-only mode is ON by default, so automatic calls use a configured Qwen endpoint, Groq, NVIDIA NIM, OpenRouter, Cloudflare Workers AI and Gemini. Perplexity/OpenAI are used only when free-only mode is deliberately disabled or one is explicitly selected.
+- Qwen uses bounded output, disabled hidden thinking and strict deadlines. A local PC Ollama URL is never assumed on Render; Qwen activates only when an administrator supplies a reachable endpoint.
+- Exact arithmetic and supported radical expressions are solved locally with SymPy without consuming provider quota.
 - Free-provider fallbacks are optional and rate-limited. A temporary timeout, overload or quota error places that provider on a short cooldown and immediately tries the next configured provider.
 - LangGraph controls question classification, answer generation, deterministic verification, bounded retry and human-review routing.
 - LangSmith tracing is optional and OFF unless `LANGSMITH_TRACING=true` is configured. Student inputs and outputs remain hidden unless an administrator explicitly enables trace content.

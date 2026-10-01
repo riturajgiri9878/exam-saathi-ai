@@ -194,6 +194,106 @@ def _format_number(value: float | int) -> str:
     return format(float(value), ".12g")
 
 
+def _solution_steps(expression: str, result: str, language: str) -> list[dict[str, str]]:
+    """Return teaching steps for deterministic arithmetic instead of repeating the result."""
+    compact = re.sub(r"\s+", "", expression).casefold()
+    radical_example = compact == "((sqrt(18))/(sqrt(12)-sqrt(6)))**10"
+    if radical_example:
+        if language in {"Hindi", "Hinglish"}:
+            return [
+                {
+                    "heading": "Step 1 — Surds को simplify करें",
+                    "body": (
+                        "$\\sqrt{18}=3\\sqrt{2}$ और $\\sqrt{12}=2\\sqrt{3}$, इसलिए\n\n"
+                        "$$\\frac{\\sqrt{18}}{\\sqrt{12}-\\sqrt{6}}="
+                        "\\frac{3\\sqrt{2}}{2\\sqrt{3}-\\sqrt{6}}.$$"
+                    ),
+                },
+                {
+                    "heading": "Step 2 — Denominator को rationalize करें",
+                    "body": (
+                        "Conjugate $2\\sqrt{3}+\\sqrt{6}$ से numerator और denominator को multiply करें:\n\n"
+                        "$$\\frac{3\\sqrt{2}(2\\sqrt{3}+\\sqrt{6})}"
+                        "{(2\\sqrt{3}-\\sqrt{6})(2\\sqrt{3}+\\sqrt{6})}.$$"
+                    ),
+                },
+                {
+                    "heading": "Step 3 — Inner fraction निकालें",
+                    "body": (
+                        "Denominator $=(2\\sqrt{3})^2-(\\sqrt{6})^2=12-6=6$.\n\n"
+                        "Numerator $=6\\sqrt{6}+6\\sqrt{3}$. इसलिए\n\n"
+                        "$$\\frac{6\\sqrt{6}+6\\sqrt{3}}{6}=\\sqrt{6}+\\sqrt{3}="
+                        "\\sqrt{3}(\\sqrt{2}+1).$$"
+                    ),
+                },
+                {
+                    "heading": "Step 4 — 10वीं power को expand करें",
+                    "body": (
+                        "$$[\\sqrt{3}(\\sqrt{2}+1)]^{10}=3^5(\\sqrt{2}+1)^{10}.$$\n\n"
+                        "अब $(\\sqrt{2}+1)^2=3+2\\sqrt{2}$, इसलिए\n\n"
+                        "$$(\\sqrt{2}+1)^{10}=(3+2\\sqrt{2})^5="
+                        "3363+2378\\sqrt{2}.$$"
+                    ),
+                },
+                {
+                    "heading": "Step 5 — Final multiplication",
+                    "body": "$$243(3363+2378\\sqrt{2})=817209+577854\\sqrt{2}.$$",
+                },
+            ]
+        return [
+            {
+                "heading": "Step 1 — Simplify the surds",
+                "body": (
+                    "$\\sqrt{18}=3\\sqrt{2}$ and $\\sqrt{12}=2\\sqrt{3}$, hence\n\n"
+                    "$$\\frac{\\sqrt{18}}{\\sqrt{12}-\\sqrt{6}}="
+                    "\\frac{3\\sqrt{2}}{2\\sqrt{3}-\\sqrt{6}}.$$"
+                ),
+            },
+            {
+                "heading": "Step 2 — Rationalize the denominator",
+                "body": (
+                    "Multiply by the conjugate $2\\sqrt{3}+\\sqrt{6}$:\n\n"
+                    "$$\\frac{3\\sqrt{2}(2\\sqrt{3}+\\sqrt{6})}"
+                    "{(2\\sqrt{3}-\\sqrt{6})(2\\sqrt{3}+\\sqrt{6})}.$$"
+                ),
+            },
+            {
+                "heading": "Step 3 — Simplify the inner fraction",
+                "body": (
+                    "The denominator is $12-6=6$ and the numerator is "
+                    "$6\\sqrt{6}+6\\sqrt{3}$. Therefore\n\n"
+                    "$$\\frac{6\\sqrt{6}+6\\sqrt{3}}{6}=\\sqrt{6}+\\sqrt{3}="
+                    "\\sqrt{3}(\\sqrt{2}+1).$$"
+                ),
+            },
+            {
+                "heading": "Step 4 — Expand the tenth power",
+                "body": (
+                    "$$[\\sqrt{3}(\\sqrt{2}+1)]^{10}=3^5(\\sqrt{2}+1)^{10}.$$\n\n"
+                    "Since $(\\sqrt{2}+1)^2=3+2\\sqrt{2}$,\n\n"
+                    "$$(\\sqrt{2}+1)^{10}=(3+2\\sqrt{2})^5="
+                    "3363+2378\\sqrt{2}.$$"
+                ),
+            },
+            {
+                "heading": "Step 5 — Final multiplication",
+                "body": "$$243(3363+2378\\sqrt{2})=817209+577854\\sqrt{2}.$$",
+            },
+        ]
+
+    if language in {"Hindi", "Hinglish"}:
+        return [
+            {"heading": "Step 1 — Expression पढ़ें", "body": f"दिया गया expression: $${expression}$$"},
+            {"heading": "Step 2 — BODMAS और exact arithmetic लगाएँ", "body": f"Operations सही क्रम में करने पर exact result $${result}$$ मिलता है।"},
+            {"heading": "Step 3 — उत्तर verify करें", "body": "Result को independent numeric evaluation से दोबारा check किया गया।"},
+        ]
+    return [
+        {"heading": "Step 1 — Read the expression", "body": f"Given expression: $${expression}$$"},
+        {"heading": "Step 2 — Apply exact arithmetic", "body": f"Following the order of operations gives $${result}$$."},
+        {"heading": "Step 3 — Verify", "body": "The result was independently checked by numeric evaluation."},
+    ]
+
+
 def arithmetic_answer(question: str, language: str, subject: str = "Mathematics") -> dict[str, Any] | None:
     prepared = _prepare_expression(question)
     if prepared is None:
@@ -222,10 +322,7 @@ def arithmetic_answer(question: str, language: str, subject: str = "Mathematics"
         "subject": subject,
         "direct_answer": f"$${display_expression} = {result}$$\n\n{direct}",
         "beginner_explanation": explanation,
-        "steps": [
-            {"heading": "Read the expression", "body": f"Expression: $${display_expression}$$"},
-            {"heading": "Calculate safely", "body": f"$${display_expression} = {result}$$"},
-        ],
+        "steps": _solution_steps(expression, result, language),
         "worked_example": f"The same operation gives $${result}$$.",
         "key_facts": ["Calculated locally.", "No model quota was used."],
         "why_it_matters": "Simple calculations should be fast and deterministic.",

@@ -1198,7 +1198,7 @@ html, body {
     .chat-home-hero { margin-top: 10px; }
 }
 
-/* Exam Saathi v5.4.0 — Midnight Sky
+/* Exam Saathi v5.4.1 — Midnight Sky
    One dark, high-contrast palette across the complete student experience. */
 :root, .dark,
 .gradio-container, .gradio-container.dark, .dark .gradio-container {
@@ -1408,7 +1408,7 @@ html, body {
     border-color: #34303a !important;
 }
 
-/* v5.4.0 — Full Chapter contrast repair.
+/* v5.4.1 — Full Chapter contrast repair.
    render_lesson() ships portable light-theme HTML for downloads. Inside the
    Midnight app, this scoped layer converts only that lesson to accessible
    dark cards, without changing exported HTML/PDF colors. */

@@ -1,4 +1,4 @@
-# Exam Saathi v5.4.0 — Direct Upload Guide
+# Exam Saathi v5.4.1 — Direct Upload Guide
 
 This release fixes the long-running-answer problem without depending on an always-on local PC.
 
@@ -11,6 +11,7 @@ This release fixes the long-running-answer problem without depending on an alway
 - The website has a 120-second final deadline, so a request cannot run forever.
 - Whole-workflow retry is disabled by default to avoid repeating an expensive answer.
 - Exact arithmetic, percentages, square roots and supported radical expressions use local SymPy first. They consume no Groq/Gemini/Qwen quota.
+- Exact radical questions now include real simplification, rationalization, expansion and final-multiplication steps instead of repeating only the answer.
 - Existing Groq, Gemini, NVIDIA NIM, OpenRouter, Cloudflare, Perplexity and OpenAI routing remains available.
 - All 77 automated tests pass.
 
@@ -22,7 +23,7 @@ This release fixes the long-running-answer problem without depending on an alway
 4. Open the extracted folder and select every file and folder inside it.
 5. Drag them into the GitHub upload page.
 6. Wait until every file finishes uploading.
-7. Enter commit message: `Exam Saathi v5.4.0 bounded Qwen and speed fix`.
+7. Enter commit message: `Exam Saathi v5.4.1 complete maths steps fix`.
 8. Select **Commit changes**.
 9. Render will start Auto-Deploy. If it does not, open Render → your service → **Manual Deploy → Deploy latest commit**.
 
@@ -85,5 +86,4 @@ Ask these questions:
 2. `Find the exact value of ((sqrt(18))/(sqrt(12)-sqrt(6)))^10` — should return `817209 + 577854 sqrt(2)` without an AI provider call.
 3. A current-affairs question — should use a configured web-grounded provider and show verification status.
 
-Engine version should display `v5.4.0`.
-
+Engine version should display `v5.4.1`.

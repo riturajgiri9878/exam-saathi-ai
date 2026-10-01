@@ -1,4 +1,4 @@
-# Exam Saathi v5.4.0 Test Report
+# Exam Saathi v5.4.1 Test Report
 
 - Python compile check: PASS
 - Full automated suite: PASS
@@ -6,6 +6,7 @@
 - Failures: 0
 - Errors: 0
 - Exact radical regression: PASS
+- Five-stage radical explanation regression: PASS
 - Qwen no-thinking payload regression: PASS
 - Bounded provider timeout and attempt regression: PASS
 - Chat-first home, visual exports, agent graph, LlamaIndex and LangSmith privacy regressions: PASS

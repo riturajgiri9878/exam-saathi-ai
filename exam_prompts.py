@@ -6,6 +6,7 @@ import re
 from typing import Any
 
 from langchain_core.runnables import RunnableLambda
+from question_validator import validate_question
 
 
 EMAIL_PATTERN = re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b")
@@ -32,10 +33,14 @@ def _normalise_payload(payload: dict[str, Any]) -> dict[str, Any]:
     question = " ".join(str(payload.get("question", "")).split()).strip()
     if not question:
         raise ValueError("Type one question before pressing Solve.")
+    validation = validate_question(question)
+    if not validation.valid:
+        raise ValueError(validation.message)
     payload["question"] = question
+    payload["validation"] = validation.as_dict()
     payload["trace_question"] = redact_sensitive_text(question)
     payload["language"] = str(payload.get("language") or "Hinglish").strip()
-    payload["workflow_events"] = ["Input normalised by LangChain LCEL"]
+    payload["workflow_events"] = ["Input normalised by LangChain LCEL and question validated"]
     return payload
 
 
@@ -45,4 +50,3 @@ INTAKE_CHAIN = RunnableLambda(_copy_payload) | RunnableLambda(_normalise_payload
 
 def prepare_intake(payload: dict[str, Any]) -> dict[str, Any]:
     return INTAKE_CHAIN.invoke(payload)
-

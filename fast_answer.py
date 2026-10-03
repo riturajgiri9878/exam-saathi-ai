@@ -339,8 +339,8 @@ def arithmetic_answer(question: str, language: str, subject: str = "Mathematics"
             "edges": ["read", "calculate", "return"],
             "accuracy_note": "Deterministic local calculation.",
         },
-        "verification_status": "VERIFIED",
-        "confidence": 100,
+        "verification_status": "LOCALLY_VERIFIED",
+        "confidence": 99,
         "verification_notes": ["Verified by Exam Saathi's restricted local arithmetic evaluator."],
     }, subject, language)
     payload.update({
@@ -362,6 +362,7 @@ def arithmetic_answer(question: str, language: str, subject: str = "Mathematics"
         "checked_at": time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime()),
         "fast_path": True,
         "fast_path_type": "arithmetic",
+        "verification_basis": "deterministic_calculation",
     })
     return payload
 

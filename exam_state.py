@@ -25,3 +25,5 @@ class ExamState(TypedDict, total=False):
     pdf_file: str
     workflow_events: list[str]
     generate_artifacts: bool
+    validation: dict[str, Any]
+    cache_hit: bool

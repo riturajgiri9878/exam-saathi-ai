@@ -18,6 +18,9 @@ from exam_state import ExamState
 from exam_tools import generate_visual_pack, plan_question, solve_with_verified_engine
 from exam_verifier import inspect_answer
 from fast_answer import try_fast_answer
+from answer_cache import ANSWER_CACHE
+from subject_validators import validate_subject_answer
+from observability import event
 
 
 GraphSolveFn = Callable[..., dict[str, Any]]
@@ -111,8 +114,15 @@ class ExamSaathiWorkflow:
         if retry_count and state.get("route", {}).get("use_web"):
             force_web = True
         answer = None
+        route_dict = state.get("route", {})
+        cache_key = ANSWER_CACHE.key(
+            state["question"], state.get("language", "Hinglish"),
+            state.get("subject", "General Studies"), "6.0.0",
+        )
+        if retry_count == 0 and not state.get("force_web"):
+            answer = ANSWER_CACHE.get(cache_key)
         if retry_count == 0:
-            answer = try_fast_answer(
+            answer = answer or try_fast_answer(
                 state["question"],
                 state.get("language", "Hinglish"),
                 state.get("subject", "General Studies"),
@@ -127,6 +137,11 @@ class ExamSaathiWorkflow:
                 subject_override=state.get("subject_override"),
                 conversation_history=state.get("chat_history"),
             )
+        cache_hit = bool(answer.get("cache_hit"))
+        if not cache_hit:
+            ANSWER_CACHE.put(cache_key, answer, route_dict)
+        event("answer_solved", subject=state.get("subject"), cache_hit=cache_hit,
+              fast_path=bool(answer.get("fast_path")), retry_count=retry_count)
         evidence = list(state.get("rag_context") or [])
         retrieval_engine = str(evidence[0].get("retrieval_engine") or "") if evidence else ""
         answer["agentic_workflow"] = {
@@ -141,10 +156,17 @@ class ExamSaathiWorkflow:
         )
         if retrieval_engine:
             label += f" with {retrieval_engine}"
-        return {"answer": answer, "workflow_events": self._events(state, label)}
+        return {"answer": answer, "cache_hit": cache_hit,
+                "workflow_events": self._events(state, label + (" (cache hit)" if cache_hit else ""))}
 
     def _verify(self, state: ExamState) -> dict[str, Any]:
         report = inspect_answer(state.get("answer", {}), state.get("route", {}))
+        subject_issues = validate_subject_answer(
+            state.get("question", ""), state.get("answer", {}), state.get("subject", "General Studies")
+        )
+        if subject_issues:
+            report = type(report)(False, max(0, report.score - 12 * len(subject_issues)),
+                                  [*report.issues, *subject_issues], report.retryable, True)
         retry_count = int(state.get("retry_count", 0))
         max_retries = int(state.get("max_retries", self.max_retries))
         if report.passed:

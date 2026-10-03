@@ -47,7 +47,7 @@ def inspect_answer(answer: dict[str, Any], route: dict[str, Any]) -> Verificatio
     score = confidence
     score -= min(60, 12 * len(issues))
     score = max(0, min(100, score))
-    passed = status == "VERIFIED" and score >= 80 and not issues
+    passed = status in {"VERIFIED", "LOCALLY_VERIFIED"} and score >= 80 and not issues
     note_text = " ".join(str(item) for item in answer.get("verification_notes", [])).casefold()
     blocked_provider = any(phrase in note_text for phrase in (
         "quota/rate limit", "api key is missing", "not configured", "not permitted",

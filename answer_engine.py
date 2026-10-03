@@ -30,9 +30,10 @@ from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
 import pymupdf
+from provider_health import PROVIDER_HEALTH
 
 
-ENGINE_VERSION = "5.4.1"
+ENGINE_VERSION = "6.0.0"
 ANSWER_PROVIDER = os.environ.get("ANSWER_PROVIDER", "auto").strip().lower()
 FREE_PROVIDER_ONLY = os.environ.get(
     "EXAM_SAATHI_FREE_ONLY", "true"
@@ -1139,6 +1140,10 @@ def _default_generate(
             "openai": ("OpenAI", _openai_generate),
         }[provider])
 
+    # Provider suitability order remains deterministic. Runtime health is
+    # recorded below and the existing cooldown immediately skips endpoints
+    # that recently timed out, hit quota, or returned overload errors.
+
     errors: list[str] = []
     configured_attempts = 0
     for name, generate in attempts:
@@ -1174,6 +1179,7 @@ def _default_generate(
         if max_attempts is not None and configured_attempts >= max_attempts:
             break
         configured_attempts += 1
+        provider_started = time.monotonic()
         try:
             if timeout_seconds is None:
                 result = generate(prompt, use_web, use_code)
@@ -1186,9 +1192,12 @@ def _default_generate(
                 )
             if response_validator is not None:
                 response_validator(result[0])
+            PROVIDER_HEALTH.record(name, True, time.monotonic() - provider_started)
             return result
         except Exception as error:
-            errors.append(f"{name}: {_provider_error_text(error)}")
+            short_error = _provider_error_text(error)
+            PROVIDER_HEALTH.record(name, False, time.monotonic() - provider_started, short_error)
+            errors.append(f"{name}: {short_error}")
             _start_provider_cooldown(name, error)
     detail = " | ".join(errors) if errors else "No answer provider API key is configured"
     raise RuntimeError(
@@ -1697,7 +1706,7 @@ def solve_question(
 
 
 def answer_markdown(answer: dict[str, Any]) -> str:
-    status_icons = {"VERIFIED": "✅", "REVIEW_NEEDED": "⚠️", "INSUFFICIENT": "🛑"}
+    status_icons = {"VERIFIED": "✅", "LOCALLY_VERIFIED": "🧮", "REVIEW_NEEDED": "⚠️", "INSUFFICIENT": "🛑"}
     status = answer.get("verification_status", "REVIEW_NEEDED")
     if answer.get("fast_path_type") == "arithmetic":
         lines = [
@@ -1711,7 +1720,7 @@ def answer_markdown(answer: dict[str, Any]) -> str:
         for item in answer.get("steps", []):
             lines.extend([f"**{item.get('heading', 'Step')}:** {item.get('body', '')}", ""])
         lines.extend([
-            f"✅ **Locally verified** · Confidence: **{answer.get('confidence', 100)}%** · "
+            "🧮 **Deterministically verified by the local calculator** · "
             "No AI quota or web search used.",
         ])
         return "\n".join(lines)

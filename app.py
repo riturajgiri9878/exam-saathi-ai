@@ -27,6 +27,7 @@ from answer_engine import (
 )
 from exam_graph import run_exam_graph
 from fast_answer import fast_answer_available
+from feedback_store import save_feedback
 
 from core import (
     SECURITY_GUARD,
@@ -374,7 +375,7 @@ def _question_context(question: str, analysis: dict[str, Any]) -> list[dict[str,
 
 def _verification_panel(answer: dict[str, Any]) -> str:
     status = answer.get("verification_status", "REVIEW_NEEDED")
-    icon = {"VERIFIED": "✅", "REVIEW_NEEDED": "⚠️", "INSUFFICIENT": "🛑"}.get(status, "⚠️")
+    icon = {"VERIFIED": "✅", "LOCALLY_VERIFIED": "🧮", "REVIEW_NEEDED": "⚠️", "INSUFFICIENT": "🛑"}.get(status, "⚠️")
     route = answer.get("route", {})
     checks = []
     if route.get("web_grounding"):
@@ -393,12 +394,28 @@ def _verification_panel(answer: dict[str, Any]) -> str:
         str(model) for model in answer.get("models", [])
         if model and model != "review-unavailable"
     ) or "not reported"
+    evidence_label = {
+        "LOCALLY_VERIFIED": "Deterministic local check",
+        "VERIFIED": "Evidence checks passed",
+        "REVIEW_NEEDED": "Human review recommended",
+        "INSUFFICIENT": "Insufficient evidence",
+    }.get(status, "Unclassified")
     return (
-        f"{icon} **{status}** · Confidence: **{answer.get('confidence', 0)}%** · "
+        f"{icon} **{evidence_label}** · Status: `{status}` · "
         f"Subject: **{answer.get('subject', 'General Studies')}** · Checks: {check_text} · "
         f"Models: **{providers}** · "
         f"Engine: **v{answer.get('engine_version', ENGINE_VERSION)}**"
     )
+
+
+def submit_answer_feedback_ui(verdict, note, active_chat_id, conversations):
+    record = next((item for item in (conversations or []) if item.get("id") == active_chat_id), None)
+    if not record or not record.get("messages"):
+        return "⚠️ पहले कोई answer solve करें।"
+    messages = record["messages"]
+    question = next((str(x.get("content", "")) for x in reversed(messages) if x.get("role") == "user"), "")
+    answer = next((str(x.get("content", "")) for x in reversed(messages) if x.get("role") == "assistant"), "")
+    return "✅ " + save_feedback(question, answer, verdict, note)
 
 
 def progressive_answer_frames(markdown: str, target_characters: int = 520) -> list[str]:
@@ -1581,6 +1598,13 @@ with gr.Blocks(title="Exam Saathi AI") as demo:
                     label="Force online verification (current facts use it automatically)", value=False,
                 )
             quick_error = gr.Markdown()
+            with gr.Accordion("Was this answer correct?", open=False):
+                quick_feedback_note = gr.Textbox(label="Optional correction / issue", lines=2)
+                with gr.Row():
+                    feedback_correct = gr.Button("✅ Correct")
+                    feedback_incorrect = gr.Button("❌ Incorrect")
+                    feedback_report = gr.Button("🚩 Report issue")
+                quick_feedback_status = gr.Markdown()
             with gr.Accordion("📥 Download this visual answer", open=False, elem_classes=["download-accordion"]):
                 gr.Markdown(
                     "Download a colorful printable PDF or an animated offline HTML lesson. "
@@ -1914,6 +1938,16 @@ with gr.Blocks(title="Exam Saathi AI") as demo:
             quick_visual_status,quick_active_chat,
         ],
     )
+    for button, verdict in [
+        (feedback_correct, "correct"),
+        (feedback_incorrect, "incorrect"),
+        (feedback_report, "report"),
+    ]:
+        button.click(
+            fn=lambda note, chat_id, chats, v=verdict: submit_answer_feedback_ui(v, note, chat_id, chats),
+            inputs=[quick_feedback_note, quick_active_chat, quick_conversations],
+            outputs=[quick_feedback_status],
+        )
     for trigger in [chat_send.click,chat_question.submit]:
         trigger(fn=smart_chat_ui,inputs=[chat_question,chat_box,current_analysis,chat_language,chat_web],outputs=[chat_box,chat_suggestions,chat_error],show_progress='minimal')
     chat_clear.click(fn=lambda:([], '', ''),outputs=[chat_box,chat_suggestions,chat_error])
